@@ -13,9 +13,9 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
-    // Sem sourcemaps no pacote final: menos superfície e binário menor.
+    // No sourcemaps in the bundle: smaller attack surface and binary.
     sourcemap: false,
-    // Nada de assets inline em data: URLs; a CSP só permite 'self'.
+    // No assets inlined as data: URLs; the CSP only allows 'self'.
     assetsInlineLimit: 0,
   },
 });

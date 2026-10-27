@@ -1,33 +1,38 @@
-# Usando o Stackquake
+# Using Stackquake
 
-1. Abra o Stackquake e clique em **Entrar com Google**. Use a conta que tem acesso ao Play Console.
-2. Pronto. Os apps da conta aparecem sozinhos, e o projeto Firebase de cada um também é encontrado automaticamente.
+1. Open Stackquake and click **Sign in with Google**. Use the account that has access to your Play Console.
+2. That's it. Your apps show up automatically, and each app's Firebase project is discovered automatically too.
 
-Nenhuma chave, JSON, ID ou integração para configurar. Funciona no plano **Spark** (gratuito) do Firebase e **não usa BigQuery**.
+No keys, JSON files, IDs or integrations to configure. It works on the free Firebase **Spark** plan and **does not use BigQuery**.
 
-## De onde vêm os dados
+## Where the data comes from
 
-| Fonte | O que traz | Período |
+| Source | What it provides | Period |
 |---|---|---|
-| **Play Console** (Android Vitals) | Taxas de falha e ANR percebidas, usuários por dia, issues e relatórios | 90 dias na primeira sincronização |
-| **Firebase Crashlytics** (API do Crashlytics) | Issues, eventos e usuários afetados por dia, % de usuários sem falha por versão, stack traces | Últimos 90 dias (limite da API) |
+| **Play Console** (Android Vitals) | User-perceived crash and ANR rates, daily users, issues and reports | 90 days on the first sync |
+| **Firebase Crashlytics** (Crashlytics API) | Issues, events and affected users per day, crash-free users per version, stack traces | Last 90 days (API limit) |
 
-O Stackquake guarda tudo localmente, então o histórico continua crescendo além dos 90 dias.
+Stackquake stores everything locally, so your history keeps growing beyond 90 days.
 
-## Várias contas Google
+## Multiple Google accounts
 
-Cada conta tem os próprios dados, separados e criptografados com uma chave própria. Ao trocar de conta, você só vê os apps da conta conectada. Ao voltar para uma conta, os dados dela (status, responsáveis, notas) continuam lá.
+Each account has its own data, separated and encrypted with its own key. When you switch accounts you only see the signed-in account's apps. When you come back, that account's data (statuses, assignees, notes) is still there.
 
-## Permissões da conta
+## Language
 
-- **Play Console**: *Ver informações do app* (somente leitura) nos apps desejados.
-- **Firebase**: acesso ao projeto Firebase do app (qualquer papel que permita ver o Crashlytics, como *Visualizador*).
+The UI follows the system language (English or Portuguese) and can be changed in **Settings → Language**.
 
-## Problemas comuns
+## Account permissions
 
-| Mensagem | O que fazer |
+- **Play Console**: *View app information* (read-only) on the apps you want.
+- **Firebase**: access to the app's Firebase project (any role that can view Crashlytics, such as *Viewer*).
+
+## Troubleshooting
+
+| Message | What to do |
 |---|---|
-| `nenhum projeto Firebase com este app foi encontrado` | A conta não tem acesso ao projeto Firebase do app. Peça acesso a quem administra o projeto. |
-| `nenhum dado do Crashlytics para este app` | O SDK do Crashlytics não está no app, ou ainda não houve nenhum evento. |
-| `sem permissão no Firebase` | A conta não tem um papel no projeto Firebase que permita ver o Crashlytics. |
-| `permissões não concedidas` | Na tela do Google alguma caixa ficou desmarcada. Entre de novo e marque todas. |
+| `No Firebase project with this app was found` | The account has no access to the app's Firebase project. Ask the project admin for access. |
+| `No Crashlytics data for this app` | The Crashlytics SDK is not in the app, or there were no events yet. |
+| `No permission in Firebase` | The account has no role in the Firebase project that can view Crashlytics. |
+| `Permissions not granted` | A box was left unchecked on Google's consent screen. Sign in again and check all boxes. |
+| `The Firebase Crashlytics API is not enabled` | Whoever publishes the build must enable it in their Google Cloud project (see [DEVELOPMENT.md](DEVELOPMENT.md)). |

@@ -1,0 +1,36 @@
+name: Bug report
+description: Something is not working as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! **Security issues must not be reported here**: use a [private security advisory](https://github.com/fabegalo/stackquake/security/advisories/new) instead.
+        Never paste tokens, OAuth client files or crash data that identifies end users.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Include the exact error message shown in the app.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Stackquake version
+      placeholder: e.g. 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Windows, macOS, Linux]
+    validations:
+      required: true

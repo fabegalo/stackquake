@@ -1,29 +1,48 @@
-# Contribuindo
+# Contributing
 
-Obrigado! O projeto é Apache-2.0 e toda contribuição entra sob essa licença.
+Thanks for helping! Stackquake is Apache-2.0 and every contribution is accepted under that license. Code, comments, docs and commit messages are in English; the UI is translated (see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#translations)).
 
-## Onde mexer
+## Where to change things
 
-| Quero… | Arquivo |
+| I want to… | File |
 |---|---|
-| Criar ou ajustar um KPI | `src-tauri/kpis/*.sql` (ou a pasta de KPIs do usuário, sem recompilar) |
-| Mudar como Play e Crashlytics são unidos | `src-tauri/src/unify.rs`, que tem testes |
-| Adicionar uma fonte de dados | novo módulo em `src-tauri/src/google/` + chamada em `sync.rs` |
-| Mudar uma tela | `src/views/*.svelte` |
-| Adicionar um comando IPC | `commands.rs` + `lib.rs` + **as três listas**: `build.rs`, `capabilities/default.json`, `isolation/index.js` |
+| Add or tune a KPI | `src-tauri/kpis/*.sql` (or the user KPI folder, no rebuild needed) |
+| Change how Play and Crashlytics are linked | `src-tauri/src/unify.rs` (has tests) |
+| Add a data source | a new module in `src-tauri/src/google/` + a call in `sync.rs` |
+| Change a screen | `src/views/*.svelte` |
+| Add or fix a translation | `src/lib/i18n/<locale>.ts` |
+| Add an IPC command | `commands.rs` + `lib.rs` + **all three lists**: `build.rs`, `capabilities/default.json`, `isolation/index.js` |
 
-## Regras de segurança (obrigatórias em PRs)
+## Security rules (required in every PR)
 
-1. **Nada de rede na interface.** Toda chamada externa passa por `http.rs`. Um host novo entra em `ALLOWED_HOSTS` com justificativa no PR.
-2. **Nenhum token ou segredo** sai do núcleo Rust, em retorno de comando, log ou mensagem de erro.
-3. **Valide toda entrada** de comando em `validate.rs`. Nunca interpole texto do usuário em SQL ou URL.
-4. **Sem HTML vindo de dados**: nada de `{@html}` no Svelte.
-5. **Sem atributos `style` inline** (a CSP bloqueia); use classes.
-6. Dependência nova precisa de justificativa, versão exata e licença na lista do `deny.toml`.
+1. **No network access from the UI.** Every external call goes through `http.rs`. A new host goes into `ALLOWED` with its allowed methods and a justification in the PR.
+2. **Firebase stays read-only.** Firebase hosts only accept GET; never add another method for them.
+3. **No token or secret** leaves the Rust core, whether in a command result, a log or an error.
+4. **Validate all command input** in `validate.rs`. Never interpolate user text into SQL or URLs.
+5. **No HTML from data**: no `{@html}` in Svelte.
+6. **No inline `style` attributes** (blocked by the CSP); use classes.
+7. **No user-facing text in Rust**: return an error code and add it to every dictionary.
+8. New dependencies need a justification, an exact version and a license allowed by `deny.toml`.
 
-Para testar o login no seu build, siga [docs/DESENVOLVIMENTO.md](docs/DESENVOLVIMENTO.md).
+## Commit messages
 
-## Checagens locais
+We use [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>(<optional scope>): <description>
+```
+
+Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`. Add `!` (or a `BREAKING CHANGE:` footer) for breaking changes. Examples:
+
+```
+feat(kpi): add crash-free sessions per version
+fix(sync): keep Play data when Crashlytics fails
+docs: explain the read-only Firebase guarantee
+```
+
+Pull request titles must follow the same format (checked by CI), since they become the squash-merge commit.
+
+## Local checks
 
 ```bash
 npm run check && npm run build

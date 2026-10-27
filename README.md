@@ -1,76 +1,87 @@
 # Stackquake
 
-Gestão unificada de **falhas e ANRs** de apps Android: junta o **Google Play Console (Android Vitals)** e o **Firebase Crashlytics** num único app desktop para **Windows, macOS e Linux**, com KPIs por app e por versão.
+**Crashes and ANRs from Google Play Console and Firebase Crashlytics, unified in one desktop app** for Windows, macOS and Linux, with problem management and KPIs per app and version.
 
-- **100% software livre** (Apache-2.0), sem servidor, sem telemetria.
-- **Só "Entrar com Google"**: sem chaves, JSON ou IDs para configurar; apps e projetos Firebase são descobertos sozinhos.
-- **Funciona no plano Spark (gratuito) do Firebase, sem BigQuery**: usa a Play Developer Reporting API e a API do Crashlytics, ambas gratuitas.
-- **Segurança em primeiro lugar**: tokens só no chaveiro do sistema, banco local criptografado, interface sem acesso à rede. Veja [SECURITY.md](SECURITY.md).
-- **Fácil de mexer**: cada KPI é um arquivo `.sql`, cada fonte de dados é um módulo isolado.
+[![CI](https://github.com/fabegalo/stackquake/actions/workflows/ci.yml/badge.svg)](https://github.com/fabegalo/stackquake/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-## O que ele faz
+[Português (Brasil)](README.pt-BR.md)
+
+- **Just "Sign in with Google"**: no keys, JSON files or IDs to configure. Apps and Firebase projects are discovered automatically.
+- **Works on the free Firebase Spark plan, no BigQuery**: uses the Play Developer Reporting API and the Crashlytics API, both free.
+- **Read-only by design**: the core only allows read requests to Firebase, tokens never leave the OS keychain, and the local database is encrypted. See [SECURITY.md](SECURITY.md).
+- **Local-first and private**: no server, no telemetry. Each Google account has its own encrypted database.
+- **Hackable**: every KPI is a `.sql` file; every data source is an isolated module.
+- **Multilingual**: English and Portuguese (Brazil), easy to extend.
+
+## Features
 
 | | |
 |---|---|
-| **Problemas unificados** | A mesma falha do Play e do Crashlytics vira um único problema (assinatura `tipo|Exceção|Classe.método`). Impacto estimado **sem contar em dobro**. |
-| **Gestão** | Status (aberto, investigando, resolvido, ignorado), responsável e notas. **Regressão automática**: um problema resolvido no versionCode N que reaparece em uma versão maior volta para "Regrediu". |
-| **KPIs** | Taxas percebidas de falha e ANR comparadas aos limites de mau comportamento do Play (1,09% / 0,47%), saúde por versão, tendência diária, top problemas, novos na última versão, cobertura das fontes. |
-| **Histórico** | As APIs só mostram os últimos 90 dias; o Stackquake guarda os dados localmente, então o histórico continua crescendo. |
-| **Várias contas** | Cada conta Google tem os próprios dados, separados e criptografados com chave própria. |
+| **Unified problems** | The same failure reported by Play and Crashlytics becomes a single problem (signature `kind\|Exception\|Class.method`). Impact is estimated **without double counting**. |
+| **Triage** | Status (open, investigating, resolved, ignored), assignee and notes. **Automatic regression detection**: a problem fixed in versionCode N that shows up in a newer version is flagged as "Regressed". |
+| **KPIs** | User-perceived crash and ANR rates against Google Play's bad-behavior thresholds (1.09% / 0.47%), crash-free users, version health, daily trend, top problems, new issues in the latest version, source coverage. |
+| **History** | The APIs only expose the last 90 days; Stackquake stores data locally, so your history keeps growing. |
+| **Multiple accounts** | Each Google account has its own data, separated and encrypted with its own key. |
 
-## Como funciona
+## Architecture
 
 ```
-Interface (Svelte/TS)   ── só exibe dados; CSP sem rede; IPC filtrado (Isolation)
-        │  16 comandos tipados, um por permissão
-Núcleo (Rust)
-  ├─ auth.rs     OAuth desktop: navegador + loopback 127.0.0.1 + PKCE S256 + state
-  ├─ secrets.rs  chaveiro do SO (Keychain / Credential Manager / Secret Service)
-  ├─ http.rs     HTTPS só para hosts da lista, métodos por host (Firebase: só GET)
-  ├─ google/     play.rs (Reporting API) · firebase.rs (descoberta) · crashlytics.rs (API do Crashlytics)
-  ├─ sync.rs     sincronização incremental, falha isolada por fonte
-  ├─ unify.rs    assinatura que liga as duas fontes (heurística testada)
-  ├─ db.rs       SQLite + SQLCipher (AES-256), um banco e uma chave por conta
-  └─ kpi.rs      KPIs .sql em conexão só leitura com autorizador
+UI (Svelte/TS)   ── renders data only; CSP with no network; filtered IPC (Isolation)
+        │  typed commands, one permission each
+Core (Rust)
+  ├─ auth.rs     desktop OAuth: system browser + loopback 127.0.0.1 + PKCE S256 + state
+  ├─ secrets.rs  OS keychain (Keychain / Credential Manager / Secret Service)
+  ├─ http.rs     HTTPS to allowlisted hosts only, methods per host (Firebase: GET only)
+  ├─ google/     play.rs (Reporting API) · firebase.rs (discovery) · crashlytics.rs
+  ├─ sync.rs     incremental sync, failures isolated per source
+  ├─ unify.rs    signature that links both sources (tested heuristic)
+  ├─ db.rs       SQLite + SQLCipher (AES-256), one database and key per account
+  └─ kpi.rs      .sql KPIs on a read-only connection with an authorizer
 ```
 
-## Começando
+## Getting started
 
-**Para usar:** abra o app e clique em **Entrar com Google**. Os apps e projetos Firebase da conta são encontrados sozinhos: [docs/SETUP.md](docs/SETUP.md).
+**Using it:** open the app and click **Sign in with Google**. See [docs/SETUP.md](docs/SETUP.md).
 
-**Para desenvolver:**
+**Developing:**
 
 ```bash
 npm install
 npm run tauri dev
 ```
 
-Para o login funcionar no seu build, registre o app no Google uma vez: [docs/DESENVOLVIMENTO.md](docs/DESENVOLVIMENTO.md).
+For sign-in to work in your own build, register the app with Google once: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
-## Criando seus KPIs
+## Custom KPIs
 
-Em **KPIs → Abrir pasta de KPIs**, crie um arquivo `.sql`:
+Go to **KPIs → Open KPI folder** and create a `.sql` file:
 
 ```sql
--- name: ANRs por versão nos últimos dias
--- description: Eventos de ANR do Crashlytics agrupados por versionCode
+-- name: ANRs per version
+-- name.pt-BR: ANRs por versão
+-- description: Crashlytics ANR events grouped by versionCode
 SELECT build_version AS version_code, SUM(events) AS anrs
-FROM crashlytics_daily
+FROM crashlytics_version_daily
 WHERE package_name = :package AND kind = 'anr'
   AND day >= date('now', '-' || :days || ' days')
 GROUP BY build_version
 ORDER BY CAST(build_version AS INTEGER) DESC
 ```
 
-Clique em **recarregar**. Um arquivo com o mesmo nome de um KPI embutido (ex.: `02_saude_por_versao.sql`) o substitui. Tabelas: `app`, `vitals_daily`, `play_issue`, `crashlytics_issue`, `crashlytics_daily`, `problem` (veja `src-tauri/sql/schema.sql`).
+Click **reload**. A file with the same name as a built-in KPI (e.g. `02_version_health.sql`) replaces it. Tables are described in [`src-tauri/sql/schema.sql`](src-tauri/sql/schema.sql).
 
-## Limitações conhecidas
+## Known limitations
 
-- O Play agrega por dia no fuso **America/Los_Angeles**; o Crashlytics, em **UTC**.
-- A ligação entre as fontes é heurística. Se o mapping do R8 não foi enviado a uma das fontes, a falha aparece ofuscada nela e não se une. O KPI "Cobertura das fontes" ajuda a detectar isso.
-- Os issues do Play vêm da janela padrão da API (os mais frequentes, até 500 por sincronização).
-- Ainda não há atualização automática do app (o updater assinado do Tauri está no roadmap).
+- Play aggregates daily data in **America/Los_Angeles**; Crashlytics in **UTC**.
+- Linking both sources is a heuristic. If an R8 mapping file was not uploaded to one source, the failure is obfuscated there and will not link. The "Source coverage" KPI helps spot this.
+- The Crashlytics API (`v1alpha`) and the Play Reporting API expose up to 90 days.
+- No auto-update yet (Tauri's signed updater is on the roadmap).
 
-## Licença
+## Contributing
 
-[Apache-2.0](LICENSE). Contribuições são bem-vindas: veja [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md); commits follow [Conventional Commits](https://www.conventionalcommits.org/).
+
+## License
+
+[Apache-2.0](LICENSE).

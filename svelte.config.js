@@ -3,8 +3,8 @@ import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 export default {
   preprocess: vitePreprocess(),
   compilerOptions: {
-    // CSS dos componentes vai para um arquivo .css, nunca para <style> inline,
-    // para que a CSP possa usar style-src 'self' sem 'unsafe-inline'.
+    // Component CSS goes to a .css file, never to inline <style>, so the CSP
+    // can use style-src 'self' without 'unsafe-inline'.
     css: "external",
   },
 };
