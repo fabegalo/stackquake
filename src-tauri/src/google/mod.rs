@@ -1,5 +1,5 @@
-//! Conectores das fontes de dados. Cada fonte é um módulo isolado; para
-//! adicionar outra, crie um módulo aqui e chame-o em `sync.rs`.
+//! Data source connectors. Each source is an isolated module; to add another,
+//! create a module here and call it from `sync.rs`.
 
 pub mod crashlytics;
 pub mod firebase;

@@ -1,16 +1,16 @@
-//! Assinatura de falha: a chave que liga um issue do Play a um do Crashlytics.
+//! Failure signature: the key that links a Play issue to a Crashlytics issue.
 //!
-//! Formato legível (de propósito, para depurar e ajustar):
-//!     `<kind>|<TipoSimplesDaExceção>|<Classe.método>`
+//! Human-readable on purpose (easy to debug and tune):
+//!     `<kind>|<SimpleExceptionType>|<Class.method>`
 //!
-//! - Play CRASH/NON_FATAL: `cause` (exceção mais interna) + `location` (método provável).
-//! - Play ANR: primeiro frame do app no relatório de amostra (ou a activity, se não houver).
-//! - Crashlytics: tipo da exceção mais interna + `blame_frame.symbol`.
+//! - Play CRASH/NON_FATAL: `cause` (innermost exception) + `location` (likely method).
+//! - Play ANR: first app frame of the sample report (or the activity, if none).
+//! - Crashlytics: innermost exception type + `blame_frame.symbol`.
 //!
-//! É uma heurística: se seu app tiver colisões ou separações erradas, este é o
-//! arquivo a mudar (há testes abaixo).
+//! It is a heuristic: if your app gets wrong merges or splits, this is the file
+//! to change (tests below).
 
-/// Pacotes de framework ignorados ao procurar o "primeiro frame do app".
+/// Framework packages skipped when looking for the "first app frame".
 const FRAMEWORK_PREFIXES: &[&str] = &[
     "java.",
     "javax.",
@@ -50,9 +50,9 @@ pub fn simple_type(t: &str) -> &str {
     t.rsplit(['.', '$']).next().unwrap_or(t)
 }
 
-/// Normaliza um símbolo de stack para `Classe.método`, removendo pacote,
-/// argumentos, arquivo/linha e sufixos gerados pelo compilador (lambdas,
-/// classes anônimas, sintéticos do R8/D8).
+/// Normalizes a stack symbol to `Class.method`, removing the package,
+/// arguments, file/line and compiler-generated suffixes (lambdas, anonymous
+/// classes, R8/D8 synthetics).
 pub fn normalize_symbol(sym: &str) -> String {
     let s = sym.trim();
     let s = s.strip_prefix("at ").unwrap_or(s);
@@ -84,7 +84,7 @@ pub fn is_app_frame(sym: &str) -> bool {
     !FRAMEWORK_PREFIXES.iter().any(|p| sym.starts_with(p))
 }
 
-/// Primeiro frame do app num relatório textual (stack Java ou dump de ANR).
+/// First app frame in a textual report (Java stack or ANR dump).
 pub fn first_app_frame(report: &str) -> Option<String> {
     report
         .lines()
@@ -107,9 +107,9 @@ pub fn title(kind: &str, exception_type: &str, location: &str) -> String {
     let loc = normalize_symbol(location);
     match kind {
         "anr" if loc.is_empty() => "ANR".to_string(),
-        "anr" => format!("ANR em {loc}"),
+        "anr" => format!("ANR in {loc}"),
         _ if loc.is_empty() => simple_type(exception_type).to_string(),
-        _ => format!("{} em {loc}", simple_type(exception_type)),
+        _ => format!("{} in {loc}", simple_type(exception_type)),
     }
 }
 
@@ -119,13 +119,13 @@ mod tests {
 
     #[test]
     fn same_crash_from_both_sources_matches() {
-        // Play: cause = tipo mais interno, location = método provável.
+        // Play: cause = innermost type, location = likely method.
         let play = signature(
             "crash",
             "IllegalStateException",
             "com.acme.ui.CheckoutActivity.onCreate",
         );
-        // Crashlytics: tipo totalmente qualificado + blame_frame.symbol.
+        // Crashlytics: fully qualified type + blame_frame.symbol.
         let cl = signature(
             "crash",
             "java.lang.IllegalStateException",

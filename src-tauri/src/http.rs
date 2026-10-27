@@ -1,13 +1,12 @@
-//! Único ponto de saída de rede do aplicativo.
+//! The app's single network egress point.
 //!
-//! Toda requisição passa por `GoogleHttp`, que só aceita HTTPS para uma lista
-//! fixa de hosts do Google, cada um com os métodos HTTP permitidos, e não segue
-//! redirecionamentos. A interface não tem acesso à rede (CSP `connect-src` só
-//! permite IPC).
+//! Every request goes through `GoogleHttp`, which only accepts HTTPS to a fixed
+//! list of Google hosts, each with its allowed HTTP methods, and never follows
+//! redirects. The UI has no network access (CSP `connect-src` only allows IPC).
 //!
-//! A API do Crashlytics não tem escopo somente leitura (exige `firebase`); por
-//! isso os hosts do Firebase só aceitam GET aqui: o app não consegue alterar
-//! nada no Firebase, mesmo que um bug tente.
+//! The Crashlytics API has no read-only scope (it requires `firebase`), so the
+//! Firebase hosts only accept GET here: the app cannot change anything in
+//! Firebase, even if a bug tries to.
 
 use std::time::Duration;
 
@@ -16,16 +15,16 @@ use url::Url;
 
 use crate::error::{AppError, AppResult};
 
-/// Host -> métodos permitidos.
+/// Host -> allowed methods.
 const ALLOWED: &[(&str, &[&str])] = &[
     ("oauth2.googleapis.com", &["POST"]),
-    // `*:query` da Reporting API é POST, mas só lê dados.
+    // The Reporting API's `*:query` is a POST, but it only reads data.
     ("playdeveloperreporting.googleapis.com", &["GET", "POST"]),
     ("firebase.googleapis.com", &["GET"]),
     ("firebasecrashlytics.googleapis.com", &["GET"]),
 ];
 
-/// Respostas maiores que isso são recusadas (proteção contra consumo de memória).
+/// Larger responses are refused (protection against memory exhaustion).
 const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 pub struct GoogleHttp {
@@ -52,14 +51,14 @@ impl GoogleHttp {
         let Some(methods) = methods.filter(|_| url.scheme() == "https" && url.port().is_none())
         else {
             return Err(AppError::Network(format!(
-                "destino bloqueado pela lista de hosts permitidos: {}://{}",
+                "destination blocked by the host allowlist: {}://{}",
                 url.scheme(),
-                url.host_str().unwrap_or("(sem host)")
+                url.host_str().unwrap_or("(no host)")
             )));
         };
         if !methods.contains(&method) {
             return Err(AppError::Network(format!(
-                "método {method} bloqueado para {}",
+                "method {method} blocked for {}",
                 url.host_str().unwrap_or("?")
             )));
         }
@@ -89,7 +88,7 @@ impl GoogleHttp {
         Self::read_json(resp).await
     }
 
-    /// POST de formulário sem token (endpoints OAuth).
+    /// Form POST without a token (OAuth endpoints).
     pub async fn post_form<T: DeserializeOwned>(
         &self,
         url: Url,
@@ -106,11 +105,11 @@ impl GoogleHttp {
             .content_length()
             .is_some_and(|len| len as usize > MAX_BODY_BYTES)
         {
-            return Err(AppError::Network("resposta grande demais".into()));
+            return Err(AppError::Network("response too large".into()));
         }
         let bytes = resp.bytes().await?;
         if bytes.len() > MAX_BODY_BYTES {
-            return Err(AppError::Network("resposta grande demais".into()));
+            return Err(AppError::Network("response too large".into()));
         }
         if !status.is_success() {
             return Err(AppError::Api {
@@ -122,8 +121,8 @@ impl GoogleHttp {
     }
 }
 
-/// Extrai a mensagem de erro do formato padrão do Google (`{"error": {...}}`
-/// ou `{"error": "...", "error_description": "..."}` do OAuth), truncada.
+/// Extracts the error message from Google's standard format (`{"error": {...}}`
+/// or OAuth's `{"error": "...", "error_description": "..."}`), truncated.
 fn google_error_message(body: &[u8]) -> String {
     let v: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
     let msg = match &v["error"] {

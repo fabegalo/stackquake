@@ -1,17 +1,17 @@
--- Esquema do banco local (SQLCipher), um banco por conta Google.
--- Versão controlada por PRAGMA user_version.
--- kind: 'crash' | 'anr' | 'nonfatal' (mesmo vocabulário para Play e Crashlytics).
+-- Local database schema (SQLCipher), one database per Google account.
+-- Versioned with PRAGMA user_version.
+-- kind: 'crash' | 'anr' | 'nonfatal' (same vocabulary for Play and Crashlytics).
 
 CREATE TABLE IF NOT EXISTS app (
   package_name     TEXT PRIMARY KEY,
   display_name     TEXT,
-  firebase_project TEXT,          -- descoberto automaticamente (Firebase Management API)
-  firebase_app_id  TEXT,          -- ex.: 1:123:android:abc (usado pela API do Crashlytics)
+  firebase_project TEXT,          -- discovered automatically (Firebase Management API)
+  firebase_app_id  TEXT,          -- e.g. 1:123:android:abc (used by the Crashlytics API)
   enabled          INTEGER NOT NULL DEFAULT 1,
   last_sync_at     TEXT
 );
 
--- Android Vitals (Play) por dia. version_code = '*' guarda o total do app.
+-- Android Vitals (Play) per day. version_code = '*' holds the app total.
 CREATE TABLE IF NOT EXISTS vitals_daily (
   package_name        TEXT NOT NULL,
   metric_set          TEXT NOT NULL CHECK (metric_set IN ('crash', 'anr')),
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS play_issue (
   PRIMARY KEY (package_name, issue_id)
 );
 
--- Issues do Crashlytics (API do Crashlytics, sem BigQuery).
+-- Crashlytics issues (Crashlytics API, no BigQuery).
 CREATE TABLE IF NOT EXISTS crashlytics_issue (
   package_name  TEXT NOT NULL,
   issue_id      TEXT NOT NULL,
@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS crashlytics_issue (
   PRIMARY KEY (package_name, issue_id)
 );
 
--- Eventos e usuários afetados por issue, por dia (UTC).
+-- Events and affected users per issue, per day (UTC).
 CREATE TABLE IF NOT EXISTS crashlytics_issue_daily (
   package_name TEXT NOT NULL,
   issue_id     TEXT NOT NULL,
@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS crashlytics_issue_daily (
   PRIMARY KEY (package_name, issue_id, day)
 );
 
--- Saúde por versão e dia. kind: 'all' (com % sem falha), 'crash', 'anr'.
+-- Health per version and day. kind: 'all' (with crash-free %), 'crash', 'anr'.
 CREATE TABLE IF NOT EXISTS crashlytics_version_daily (
   package_name        TEXT NOT NULL,
   kind                TEXT NOT NULL CHECK (kind IN ('all', 'crash', 'anr')),
@@ -81,12 +81,12 @@ CREATE TABLE IF NOT EXISTS crashlytics_version_daily (
   display_version     TEXT,            -- versionName
   events              INTEGER NOT NULL,
   users               INTEGER NOT NULL,
-  crash_free_users    REAL,            -- fração 0–1
+  crash_free_users    REAL,            -- fraction 0–1
   crash_free_sessions REAL,
   PRIMARY KEY (package_name, kind, day, build_version)
 );
 
--- Distribuição de um issue por versão (buscada sob demanda no detalhe).
+-- Per-version distribution of an issue (fetched on demand in the detail view).
 CREATE TABLE IF NOT EXISTS crashlytics_issue_version (
   package_name    TEXT NOT NULL,
   issue_id        TEXT NOT NULL,
@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS crashlytics_issue_version (
   PRIMARY KEY (package_name, issue_id, build_version)
 );
 
--- Problema unificado: uma assinatura pode juntar issues das duas fontes.
+-- Unified problem: one signature can join issues from both sources.
 CREATE TABLE IF NOT EXISTS problem (
   id                  INTEGER PRIMARY KEY,
   package_name        TEXT NOT NULL,

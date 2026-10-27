@@ -1,15 +1,17 @@
-//! KPIs são arquivos .sql. Os embutidos ficam em `src-tauri/kpis/`; o usuário
-//! pode criar os próprios (ou sobrescrever um embutido com o mesmo nome) na
-//! pasta de KPIs do app, sem recompilar.
+//! KPIs are .sql files. Built-in ones live in `src-tauri/kpis/`; users can add
+//! their own (or override a built-in one with the same name) in the app's KPI
+//! folder, without recompiling.
 //!
-//! Cabeçalho opcional:
-//!     -- name: Nome exibido
-//!     -- description: Texto de ajuda
-//! Parâmetros disponíveis: `:package` (app selecionado) e `:days` (janela).
+//! Optional header (translations via `name.<locale>` / `description.<locale>`):
+//!     -- name: Display name
+//!     -- name.pt-BR: Nome exibido
+//!     -- description: Help text
+//! Available parameters: `:package` (selected app) and `:days` (window).
 //!
-//! Segurança: rodam numa conexão só de leitura, com autorizador que bloqueia
-//! escrita/ATTACH/PRAGMA, limite de tempo (5 s) e de linhas (5.000).
+//! Security: they run on a read-only connection, with an authorizer that blocks
+//! writes/ATTACH/PRAGMA, a time limit (5 s) and a row limit (5,000).
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -20,26 +22,23 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult};
 
 const BUILTIN: &[(&str, &str)] = &[
-    ("01_resumo", include_str!("../kpis/01_resumo.sql")),
+    ("01_summary", include_str!("../kpis/01_summary.sql")),
     (
-        "02_saude_por_versao",
-        include_str!("../kpis/02_saude_por_versao.sql"),
+        "02_version_health",
+        include_str!("../kpis/02_version_health.sql"),
+    ),
+    ("03_daily_trend", include_str!("../kpis/03_daily_trend.sql")),
+    (
+        "04_top_problems",
+        include_str!("../kpis/04_top_problems.sql"),
     ),
     (
-        "03_tendencia_diaria",
-        include_str!("../kpis/03_tendencia_diaria.sql"),
+        "05_new_and_regressed",
+        include_str!("../kpis/05_new_and_regressed.sql"),
     ),
     (
-        "04_top_problemas",
-        include_str!("../kpis/04_top_problemas.sql"),
-    ),
-    (
-        "05_novos_e_regressoes",
-        include_str!("../kpis/05_novos_e_regressoes.sql"),
-    ),
-    (
-        "06_cobertura_fontes",
-        include_str!("../kpis/06_cobertura_fontes.sql"),
+        "06_source_coverage",
+        include_str!("../kpis/06_source_coverage.sql"),
     ),
 ];
 
@@ -48,22 +47,26 @@ const MAX_SQL_BYTES: u64 = 64 * 1024;
 const MAX_ROWS: usize = 5000;
 const TIMEOUT: Duration = Duration::from_secs(5);
 
-const USER_README: &str = "KPIs personalizados do Stackquake\n\
-================================\n\n\
-Coloque aqui arquivos .sql (um KPI por arquivo). O nome do arquivo é o ID do KPI;\n\
-um arquivo com o mesmo ID de um KPI embutido (ex.: 02_saude_por_versao.sql) o substitui.\n\n\
-Cabeçalho opcional:\n  -- name: Meu KPI\n  -- description: O que ele mostra\n\n\
-Parâmetros: :package (app selecionado) e :days (janela em dias).\n\
-Tabelas: app, vitals_daily, play_issue, crashlytics_issue, crashlytics_issue_daily,\n\
+const USER_README: &str = "Stackquake custom KPIs\n\
+======================\n\n\
+Put .sql files here (one KPI per file). The file name is the KPI ID; a file with\n\
+the same ID as a built-in KPI (e.g. 02_version_health.sql) replaces it.\n\n\
+Optional header:\n  -- name: My KPI\n  -- name.pt-BR: Meu KPI\n  -- description: What it shows\n\n\
+Parameters: :package (selected app) and :days (window in days).\n\
+Tables: app, vitals_daily, play_issue, crashlytics_issue, crashlytics_issue_daily,\n\
 crashlytics_version_daily, crashlytics_issue_version, problem.\n\
-As consultas são somente leitura.\n";
+Queries are read-only.\n";
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct KpiInfo {
     pub id: String,
+    /// Default (English) name and description.
     pub name: String,
     pub description: String,
+    /// Translations by locale, from `-- name.<locale>:` / `-- description.<locale>:`.
+    pub names: BTreeMap<String, String>,
+    pub descriptions: BTreeMap<String, String>,
     pub source: &'static str,
 }
 
@@ -84,35 +87,58 @@ fn valid_id(id: &str) -> bool {
 }
 
 fn meta(id: &str, sql: &str, source: &'static str) -> KpiInfo {
-    let header = |key: &str| {
-        sql.lines()
-            .map(str::trim)
-            .take_while(|l| l.starts_with("--"))
-            .find_map(|l| {
-                l.trim_start_matches('-')
-                    .trim()
-                    .strip_prefix(key)
-                    .map(|v| v.trim().to_string())
-            })
-    };
-    KpiInfo {
+    let mut info = KpiInfo {
         id: id.to_string(),
-        name: header("name:").unwrap_or_else(|| id.to_string()),
-        description: header("description:").unwrap_or_default(),
+        name: id.to_string(),
+        description: String::new(),
+        names: BTreeMap::new(),
+        descriptions: BTreeMap::new(),
         source,
+    };
+    let header = sql
+        .lines()
+        .map(str::trim)
+        .take_while(|l| l.starts_with("--"));
+    for line in header {
+        let Some((key, value)) = line.trim_start_matches('-').trim().split_once(':') else {
+            continue;
+        };
+        let value = value.trim().to_string();
+        let (field, locale) = match key.split_once('.') {
+            Some((f, l)) if valid_locale(l) => (f, Some(l.to_string())),
+            Some(_) => continue,
+            None => (key, None),
+        };
+        match (field, locale) {
+            ("name", None) => info.name = value,
+            ("description", None) => info.description = value,
+            ("name", Some(l)) => {
+                info.names.insert(l, value);
+            }
+            ("description", Some(l)) => {
+                info.descriptions.insert(l, value);
+            }
+            _ => {}
+        }
     }
+    info
+}
+
+/// BCP 47-ish tag such as `pt-BR` or `es`.
+fn valid_locale(l: &str) -> bool {
+    !l.is_empty() && l.len() <= 10 && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 pub fn ensure_user_dir(dir: &Path) -> AppResult<()> {
     std::fs::create_dir_all(dir)?;
-    let readme = dir.join("LEIA-ME.txt");
+    let readme = dir.join("README.txt");
     if !readme.exists() {
         std::fs::write(readme, USER_README)?;
     }
     Ok(())
 }
 
-/// Todos os KPIs (embutidos + do usuário), com o SQL de cada um.
+/// All KPIs (built-in + user), with each one's SQL.
 pub fn all(user_dir: &Path) -> AppResult<Vec<(KpiInfo, String)>> {
     let mut out: Vec<(KpiInfo, String)> = BUILTIN
         .iter()
@@ -129,7 +155,7 @@ pub fn all(user_dir: &Path) -> AppResult<Vec<(KpiInfo, String)>> {
             else {
                 continue;
             };
-            // Ignora links simbólicos e arquivos grandes demais.
+            // Skips symlinks and files that are too large.
             let Ok(md) = std::fs::symlink_metadata(&path) else {
                 continue;
             };
@@ -155,19 +181,19 @@ pub fn run(db: &Db, sql: &str, package: &str, days: i64) -> AppResult<KpiResult>
 
     let mut stmt = conn
         .prepare(sql)
-        .map_err(|e| AppError::Invalid(format!("KPI inválido ou bloqueado: {e}")))?;
+        .map_err(|e| AppError::invalid_with("kpi_invalid", vec![("detail", e.to_string())]))?;
     if !stmt.readonly() {
-        return Err(AppError::Invalid("KPIs só podem ler dados".into()));
+        return Err(AppError::invalid("kpi_read_only"));
     }
     for i in 1..=stmt.parameter_count() {
         match stmt.parameter_name(i) {
             Some(":package") => stmt.raw_bind_parameter(i, package)?,
             Some(":days") => stmt.raw_bind_parameter(i, days)?,
             other => {
-                return Err(AppError::Invalid(format!(
-                    "parâmetro desconhecido no KPI: {} (use :package e :days)",
-                    other.unwrap_or("?")
-                )))
+                return Err(AppError::invalid_with(
+                    "kpi_unknown_param",
+                    vec![("name", other.unwrap_or("?").to_string())],
+                ))
             }
         }
     }
@@ -180,7 +206,7 @@ pub fn run(db: &Db, sql: &str, package: &str, days: i64) -> AppResult<KpiResult>
         rusqlite::Error::SqliteFailure(f, _)
             if f.code == rusqlite::ErrorCode::OperationInterrupted =>
         {
-            AppError::Invalid("KPI excedeu o tempo limite de 5 s".into())
+            AppError::invalid("kpi_timeout")
         }
         other => AppError::from(other),
     })? {
@@ -197,7 +223,7 @@ pub fn run(db: &Db, sql: &str, package: &str, days: i64) -> AppResult<KpiResult>
                     .map(serde_json::Value::Number)
                     .unwrap_or(serde_json::Value::Null),
                 ValueRef::Text(t) => String::from_utf8_lossy(t).into_owned().into(),
-                ValueRef::Blob(_) => "<binário>".into(),
+                ValueRef::Blob(_) => "<binary>".into(),
             });
         }
         rows.push(out);
@@ -214,14 +240,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_header() {
+    fn parses_header_with_translations() {
         let m = meta(
             "x",
-            "-- name: Meu KPI\n-- description: Ajuda\nSELECT 1",
+            "-- name: My KPI\n-- name.pt-BR: Meu KPI\n-- description: Help\n-- name.bad/locale: x\nSELECT 1",
             "user",
         );
-        assert_eq!(m.name, "Meu KPI");
-        assert_eq!(m.description, "Ajuda");
+        assert_eq!(m.name, "My KPI");
+        assert_eq!(m.description, "Help");
+        assert_eq!(m.names.get("pt-BR").map(String::as_str), Some("Meu KPI"));
+        assert_eq!(m.names.len(), 1);
     }
 
     #[test]

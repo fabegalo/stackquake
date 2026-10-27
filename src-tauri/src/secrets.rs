@@ -1,5 +1,4 @@
-//! Segredos ficam somente no chaveiro do sistema operacional, nunca em
-//! arquivos, logs ou na interface.
+//! Secrets live only in the OS keychain, never in files, logs or the UI.
 
 use zeroize::Zeroizing;
 
@@ -10,7 +9,7 @@ const SERVICE: &str = "dev.stackquake.desktop";
 pub const REFRESH_TOKEN: &str = "google-refresh-token";
 pub const ACCOUNT: &str = "google-account";
 
-/// Chave do banco local de uma conta (uma chave por conta).
+/// Local database key of an account (one key per account).
 pub fn db_key_name(account_local_id: &str) -> String {
     format!("local-db-key-{account_local_id}")
 }
@@ -39,15 +38,14 @@ pub fn delete(key: &str) -> AppResult<()> {
     }
 }
 
-/// Bytes aleatórios do gerador do sistema operacional.
+/// Random bytes from the OS generator.
 pub fn random_bytes<const N: usize>() -> AppResult<Zeroizing<[u8; N]>> {
     let mut buf = Zeroizing::new([0u8; N]);
-    getrandom::fill(buf.as_mut())
-        .map_err(|e| AppError::Other(format!("gerador aleatório: {e}")))?;
+    getrandom::fill(buf.as_mut()).map_err(|e| AppError::Other(format!("random generator: {e}")))?;
     Ok(buf)
 }
 
-/// Comparação em tempo constante (evita vazar o valor esperado por tempo de resposta).
+/// Constant-time comparison (avoids leaking the expected value through timing).
 pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;

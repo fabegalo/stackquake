@@ -1,7 +1,7 @@
--- Lista unificada de problemas.
--- Impacto = usuários afetados estimados SEM somar as fontes (a mesma falha
--- aparece no Play e no Crashlytics): o maior entre usuários do Play e
--- usuários afetados do Crashlytics, com peso menor para não fatais.
+-- Unified problem list.
+-- Impact = estimated affected users WITHOUT adding the sources together (the
+-- same failure shows up in Play and Crashlytics): the larger of Play users and
+-- Crashlytics affected users, with a lower weight for non-fatals.
 WITH pl AS (
   SELECT signature,
          SUM(report_count) AS reports,

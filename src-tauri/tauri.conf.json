@@ -37,7 +37,7 @@
     "targets": "all",
     "license": "Apache-2.0",
     "category": "DeveloperTool",
-    "shortDescription": "Falhas e ANRs do Play Console e do Crashlytics em um só lugar",
+    "shortDescription": "Play Console and Crashlytics crashes and ANRs in one place",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

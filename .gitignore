@@ -4,7 +4,7 @@ src-tauri/target/
 src-tauri/gen/
 .DS_Store
 *.log
-# Nunca versione credenciais
+# Never commit credentials
 client_secret*.json
 src-tauri/google-oauth-client.json
 *.db

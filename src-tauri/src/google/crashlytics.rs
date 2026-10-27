@@ -1,9 +1,9 @@
-//! Firebase Crashlytics API v1alpha: a mesma que o Android Studio (App Quality
-//! Insights) e a CLI do Firebase usam. Não precisa de BigQuery, então funciona
-//! no plano Spark sem configurar nada.
+//! Firebase Crashlytics API v1alpha: the same one Android Studio (App Quality
+//! Insights) and the Firebase CLI use. No BigQuery needed, so it works on the
+//! Spark plan with zero setup.
 //!
-//! Limite da API: só os últimos 90 dias. O histórico mais antigo fica no banco local.
-//! Só usamos leitura (GET); `http.rs` bloqueia qualquer outro método para este host.
+//! API limit: only the last 90 days. Older history stays in the local database.
+//! Read-only (GET); `http.rs` blocks every other method for this host.
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Deserialize;
@@ -14,7 +14,7 @@ use crate::http::GoogleHttp;
 use crate::validate;
 
 const BASE: &str = "https://firebasecrashlytics.googleapis.com/v1alpha/";
-/// A API aceita intervalos de até 90 dias atrás; 89 dá margem para fuso/relógio.
+/// The API accepts intervals up to 90 days back; 89 leaves room for clock/time zone.
 pub const MAX_DAYS: i64 = 89;
 const MAX_PAGES: usize = 10;
 
@@ -25,14 +25,14 @@ fn app_path(app_id: &str) -> AppResult<String> {
 }
 
 fn url(path: &str) -> Url {
-    Url::parse(&format!("{BASE}{path}")).expect("URL da API válida")
+    Url::parse(&format!("{BASE}{path}")).expect("valid API URL")
 }
 
 fn int(v: &Option<String>) -> i64 {
     v.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0)
 }
 
-/// A API devolve "percentage"; normalizamos para fração (0–1), como as taxas do Play.
+/// The API returns a "percentage"; we normalize to a fraction (0–1), like Play rates.
 fn fraction(v: Option<f64>) -> Option<f64> {
     v.map(|p| if p > 1.0001 { p / 100.0 } else { p })
 }
@@ -92,7 +92,7 @@ struct Report {
 }
 
 pub struct DayMetric {
-    /// `YYYY-MM-DD` (UTC), ou `None` quando o relatório não é diário.
+    /// `YYYY-MM-DD` (UTC), or `None` when the report is not daily.
     pub day: Option<String>,
     pub events: i64,
     pub users: i64,
@@ -177,7 +177,7 @@ async fn report(
     Ok(out)
 }
 
-/// Issues com eventos e usuários afetados (por dia, se `daily`).
+/// Issues with events and affected users (per day, if `daily`).
 pub async fn top_issues(
     http: &GoogleHttp,
     token: &str,
@@ -198,7 +198,7 @@ pub async fn top_issues(
         .collect())
 }
 
-/// Versões com eventos, usuários afetados e % de usuários/sessões sem falha.
+/// Versions with events, affected users and crash-free users/sessions.
 pub async fn top_versions(
     http: &GoogleHttp,
     token: &str,
@@ -263,12 +263,12 @@ pub struct Event {
 }
 
 impl Event {
-    /// Tipo da exceção mais interna (a última da lista).
+    /// Innermost exception type (the last one in the list).
     pub fn root_type(&self) -> Option<String> {
         self.exceptions.iter().rev().find_map(|e| e.kind.clone())
     }
 
-    /// Stack trace legível (exceções; ou threads culpadas/travadas em ANRs).
+    /// Readable stack trace (exceptions; or blamed/crashed threads for ANRs).
     pub fn stack_text(&self) -> String {
         fn frames(out: &mut String, fs: &[Frame]) {
             for f in fs.iter().take(200) {
@@ -298,7 +298,7 @@ impl Event {
                 let name = t.name.as_deref().or(t.title.as_deref()).unwrap_or("?");
                 out.push_str(&format!(
                     "\"{name}\"{}\n",
-                    if t.blamed { " (culpada)" } else { "" }
+                    if t.blamed { " (blamed)" } else { "" }
                 ));
                 frames(&mut out, &t.frames);
                 out.push('\n');
@@ -314,7 +314,7 @@ struct BatchGetResponse {
     events: Vec<Event>,
 }
 
-/// Eventos de amostra pelo nome completo (`projects/.../events/...`), até 100 por chamada.
+/// Sample events by full name (`projects/.../events/...`), up to 100 per call.
 pub async fn sample_events(
     http: &GoogleHttp,
     token: &str,
@@ -340,7 +340,7 @@ pub async fn sample_events(
                     q.append_pair("names", n);
                 }
                 if mask {
-                    // Só o necessário: sem logs, breadcrumbs ou custom keys.
+                    // Only what is needed: no logs, breadcrumbs or custom keys.
                     q.append_pair("read_mask", "issue,blame_frame,exceptions,threads");
                 }
             }
@@ -348,7 +348,7 @@ pub async fn sample_events(
         };
         let resp: BatchGetResponse = match http.get_json(build(true), token).await {
             Ok(r) => r,
-            // Se a máscara não for aceita, busca o evento completo.
+            // If the mask is not accepted, fetch the full event.
             Err(AppError::Api { status: 400, .. }) => http.get_json(build(false), token).await?,
             Err(e) => return Err(e),
         };
@@ -357,7 +357,7 @@ pub async fn sample_events(
     Ok(out)
 }
 
-/// `"1.2.3 (456)"` ou `"456"` -> `"456"` (versionCode).
+/// `"1.2.3 (456)"` or `"456"` -> `"456"` (versionCode).
 pub fn version_code(v: &str) -> Option<String> {
     let v = v.trim();
     if !v.is_empty() && v.chars().all(|c| c.is_ascii_digit()) {

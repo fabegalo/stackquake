@@ -1,7 +1,7 @@
-//! Sincronização incremental das duas fontes para o banco local da conta.
+//! Incremental sync of both sources into the account's local database.
 //!
-//! Cada fonte falha de forma independente: um erro no Crashlytics não impede
-//! que os dados do Play sejam salvos (vira um aviso no relatório).
+//! Each source fails independently: a Crashlytics error does not prevent Play
+//! data from being saved (it becomes a warning in the report).
 
 use std::collections::HashMap;
 
@@ -9,7 +9,7 @@ use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::Serialize;
 
 use crate::db::{ClDayIn, ClIssueDetails, ClIssueIn, Db, PlayIssueIn, ProblemDetail, VitalsIn};
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ErrorPayload};
 use crate::google::crashlytics::{self, Filter};
 use crate::google::firebase;
 use crate::google::play::{self, MetricSet};
@@ -18,14 +18,14 @@ use crate::{unify, validate};
 
 const PLAY_FIRST_DAYS: i64 = 90;
 const PLAY_WINDOW_DAYS: i64 = 30;
-/// Dias re-sincronizados a cada vez (dados que chegam atrasados).
+/// Days re-synced every time (late-arriving data).
 const OVERLAP_DAYS: i64 = 3;
 const MAX_PLAY_ISSUES: usize = 500;
 const MAX_ANR_SAMPLES: usize = 30;
-/// Issues do Crashlytics que recebem stack/assinatura definitiva por sincronização.
+/// Crashlytics issues that get their stack/final signature per sync.
 const MAX_CL_DETAILS: usize = 300;
 
-/// O que cada etapa precisa: rede, banco da conta e token.
+/// What each step needs: network, the account database and a token.
 pub struct Ctx<'a> {
     pub http: &'a GoogleHttp,
     pub db: &'a Db,
@@ -41,7 +41,24 @@ pub struct SyncReport {
     pub crashlytics_issues: usize,
     pub crashlytics_versions: usize,
     pub regressions: usize,
-    pub warnings: Vec<String>,
+    pub warnings: Vec<SyncWarning>,
+}
+
+/// A non-fatal problem in one source during a sync (translated by the UI).
+#[derive(Serialize)]
+pub struct SyncWarning {
+    /// `play_vitals`, `play_issues` or `crashlytics`.
+    pub source: &'static str,
+    pub error: ErrorPayload,
+}
+
+impl SyncWarning {
+    fn new(source: &'static str, error: AppError) -> Self {
+        Self {
+            source,
+            error: error.payload(),
+        }
+    }
 }
 
 fn day(d: NaiveDate) -> String {
@@ -53,33 +70,33 @@ fn parse_day(s: &str) -> Option<NaiveDate> {
 }
 
 fn midnight(d: NaiveDate) -> DateTime<Utc> {
-    d.and_hms_opt(0, 0, 0).expect("meia-noite válida").and_utc()
+    d.and_hms_opt(0, 0, 0).expect("valid midnight").and_utc()
 }
 
-fn friendly_crashlytics_error(e: AppError) -> String {
+/// Maps Crashlytics API failures to translatable codes.
+fn crashlytics_error(e: AppError) -> AppError {
     match e {
-        // API desligada no projeto do cliente OAuth (o projeto de quem publica
-        // o Stackquake), não um problema de permissão do usuário.
-        AppError::Api { status: 403, message }
-            if message.contains("has not been used in project") || message.contains("it is disabled") =>
+        // API disabled in the OAuth client's project (the project of whoever
+        // publishes Stackquake), not a permission problem of the user.
+        AppError::Api {
+            status: 403,
+            message,
+        } if message.contains("has not been used in project")
+            || message.contains("it is disabled") =>
         {
-            "a Firebase Crashlytics API não está ativada no projeto do Stackquake no Google Cloud. \
-             Quem publica o app precisa ativá-la (APIs e serviços → Biblioteca); depois, aguarde alguns minutos."
-                .to_string()
+            AppError::known("crashlytics_api_disabled")
         }
-        AppError::Api { status: 403, message } => format!(
-            "sem permissão no Firebase ({message}). A conta precisa ter acesso ao projeto Firebase do app."
-        ),
-        AppError::Api { status: 404, .. } => {
-            "nenhum dado do Crashlytics para este app (o SDK do Crashlytics está instalado nele?)."
-                .to_string()
-        }
-            other => other.to_string(),
+        AppError::Api {
+            status: 403,
+            message,
+        } => AppError::known_with("crashlytics_no_permission", vec![("detail", message)]),
+        AppError::Api { status: 404, .. } => AppError::known("crashlytics_no_data"),
+        other => other,
     }
 }
 
-/// Descobre o projeto/App ID Firebase dos apps que ainda não têm.
-/// Falhas aqui nunca impedem o resto.
+/// Finds the Firebase project/App ID of apps that don't have one yet.
+/// Failures here never block the rest.
 pub async fn discover_firebase_apps(ctx: &Ctx<'_>) -> AppResult<usize> {
     let missing: Vec<String> = ctx
         .db
@@ -109,15 +126,13 @@ pub async fn sync_app(ctx: &Ctx<'_>, pkg: &str) -> AppResult<SyncReport> {
     for set in [MetricSet::Crash, MetricSet::Anr] {
         match sync_vitals(ctx, &pkg, set).await {
             Ok(n) => report.vitals_rows += n,
-            Err(e) => report
-                .warnings
-                .push(format!("Play Vitals ({}): {e}", set.id())),
+            Err(e) => report.warnings.push(SyncWarning::new("play_vitals", e)),
         }
     }
 
     match sync_play_issues(ctx, &pkg).await {
         Ok(n) => report.play_issues = n,
-        Err(e) => report.warnings.push(format!("Play (issues): {e}")),
+        Err(e) => report.warnings.push(SyncWarning::new("play_issues", e)),
     }
 
     match app.firebase_app_id.as_deref() {
@@ -128,13 +143,12 @@ pub async fn sync_app(ctx: &Ctx<'_>, pkg: &str) -> AppResult<SyncReport> {
             }
             Err(e) => report
                 .warnings
-                .push(format!("Crashlytics: {}", friendly_crashlytics_error(e))),
+                .push(SyncWarning::new("crashlytics", crashlytics_error(e))),
         },
-        None => report.warnings.push(
-            "Crashlytics: nenhum projeto Firebase com este app foi encontrado na sua conta. \
-             Se ele existir, confira se sua conta tem acesso ao projeto."
-                .to_string(),
-        ),
+        None => report.warnings.push(SyncWarning::new(
+            "crashlytics",
+            AppError::known("crashlytics_no_firebase_project"),
+        )),
     }
 
     report.regressions = ctx.db.unify(&pkg)?;
@@ -191,8 +205,8 @@ async fn sync_play_issues(ctx: &Ctx<'_>, pkg: &str) -> AppResult<usize> {
         let cause = issue.cause.clone().unwrap_or_default();
         let location = issue.location.clone().unwrap_or_default();
 
-        // ANR: o Play não dá o método culpado; usamos o 1º frame do app no
-        // relatório de amostra (guardado em cache para não buscar de novo).
+        // ANR: Play does not give the blamed method; we use the first app frame
+        // of the sample report (cached so it is not fetched again).
         let mut sample = None;
         let mut sig_location = location.clone();
         if kind == "anr" {
@@ -245,7 +259,7 @@ async fn sync_play_issues(ctx: &Ctx<'_>, pkg: &str) -> AppResult<usize> {
     Ok(out.len())
 }
 
-/// Linhas diárias de um relatório (ignora pontos sem data).
+/// Daily rows of a report (skips points without a date).
 fn day_rows(key: &str, display: Option<&str>, metrics: &[crashlytics::DayMetric]) -> Vec<ClDayIn> {
     metrics
         .iter()
@@ -282,7 +296,7 @@ async fn sync_crashlytics(ctx: &Ctx<'_>, pkg: &str, app_id: &str) -> AppResult<(
         daily: true,
     };
 
-    // Issues: metadados + eventos/usuários por dia.
+    // Issues: metadata + events/users per day.
     let issues = crashlytics::top_issues(ctx.http, ctx.token, app_id, &filter(None)).await?;
     let mut issue_rows = Vec::with_capacity(issues.len());
     let mut daily = Vec::new();
@@ -323,7 +337,7 @@ async fn sync_crashlytics(ctx: &Ctx<'_>, pkg: &str, app_id: &str) -> AppResult<(
     ctx.db.upsert_crashlytics_issues(pkg, &issue_rows)?;
     ctx.db.upsert_crashlytics_issue_daily(pkg, &daily)?;
 
-    // Versões: geral (com % sem falha), só falhas e só ANRs.
+    // Versions: overall (with crash-free %), crashes only and ANRs only.
     let mut versions = 0;
     for (kind, error_type) in [
         ("all", None),
@@ -342,7 +356,7 @@ async fn sync_crashlytics(ctx: &Ctx<'_>, pkg: &str, app_id: &str) -> AppResult<(
         ctx.db.upsert_crashlytics_version_daily(pkg, kind, &rows)?;
     }
 
-    // Stack de amostra -> assinatura definitiva (liga com o Play).
+    // Sample stack -> final signature (links it with Play).
     let pending = ctx.db.crashlytics_without_details(pkg, MAX_CL_DETAILS)?;
     fetch_details(ctx, pkg, app_id, &pending).await?;
 
@@ -350,7 +364,7 @@ async fn sync_crashlytics(ctx: &Ctx<'_>, pkg: &str, app_id: &str) -> AppResult<(
     Ok((issue_rows.len(), versions))
 }
 
-/// Busca os eventos de amostra e grava stack + assinatura de cada issue.
+/// Fetches sample events and stores each issue's stack + signature.
 async fn fetch_details(
     ctx: &Ctx<'_>,
     pkg: &str,
@@ -396,8 +410,8 @@ async fn fetch_details(
     Ok(n)
 }
 
-/// Busca sob demanda o que falta no detalhe: stack de amostra das duas fontes
-/// e a distribuição por versão de cada issue do Crashlytics.
+/// Fetches on demand what the detail view is missing: sample stacks from both
+/// sources and the per-version distribution of each Crashlytics issue.
 pub async fn fetch_problem_details(ctx: &Ctx<'_>, id: i64) -> AppResult<ProblemDetail> {
     let detail = ctx.db.get_problem(id)?;
     let pkg = detail.problem.package_name.clone();
@@ -427,9 +441,7 @@ pub async fn fetch_problem_details(ctx: &Ctx<'_>, id: i64) -> AppResult<ProblemD
                 };
                 let versions = crashlytics::top_versions(ctx.http, ctx.token, app_id, &f)
                     .await
-                    .map_err(|e| {
-                        AppError::Other(format!("Crashlytics: {}", friendly_crashlytics_error(e)))
-                    })?;
+                    .map_err(crashlytics_error)?;
                 let rows: Vec<ClDayIn> = versions
                     .iter()
                     .map(|v| ClDayIn {
@@ -463,13 +475,17 @@ mod tests {
 
     #[test]
     fn explains_disabled_api_instead_of_blaming_permissions() {
-        let msg = friendly_crashlytics_error(AppError::Api {
+        let e = crashlytics_error(AppError::Api {
             status: 403,
             message:
                 "Firebase Crashlytics API has not been used in project 1 before or it is disabled."
                     .into(),
         });
-        assert!(msg.contains("não está ativada"), "{msg}");
-        assert!(!msg.contains("acesso ao projeto Firebase do app"), "{msg}");
+        assert_eq!(e.payload().code, "crashlytics_api_disabled");
+        let e = crashlytics_error(AppError::Api {
+            status: 403,
+            message: "caller does not have permission".into(),
+        });
+        assert_eq!(e.payload().code, "crashlytics_no_permission");
     }
 }

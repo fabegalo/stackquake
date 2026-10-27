@@ -1,5 +1,5 @@
 //! Google Play Developer Reporting API v1beta1 (Android Vitals).
-//! Gratuita; exige só a permissão "Ver informações do app" no Play Console.
+//! Free; only requires the "View app information" permission in Play Console.
 
 use chrono::NaiveDate;
 use serde::Deserialize;
@@ -12,10 +12,10 @@ use crate::validate;
 
 const BASE: &str = "https://playdeveloperreporting.googleapis.com/v1beta1/";
 
-/// Concatena em vez de usar `Url::join`: com `join`, um caminho como
-/// `apps:search` seria lido como uma URL absoluta de esquema `apps:`.
+/// Concatenates instead of using `Url::join`: with `join`, a path such as
+/// `apps:search` would be parsed as an absolute URL with scheme `apps:`.
 fn url(path: &str) -> Url {
-    Url::parse(&format!("{BASE}{path}")).expect("URL da API válida")
+    Url::parse(&format!("{BASE}{path}")).expect("valid API URL")
 }
 
 #[derive(Clone, Copy)]
@@ -116,7 +116,7 @@ struct MetricSetInfo {
     freshness_info: Option<FreshnessInfo>,
 }
 
-/// Último dia (exclusivo) com dados diários disponíveis.
+/// Last day (exclusive) with daily data available.
 pub async fn daily_freshness(
     http: &GoogleHttp,
     token: &str,
@@ -178,7 +178,7 @@ struct QueryResponse {
 
 pub struct DailyMetric {
     pub day: NaiveDate,
-    /// `None` = total do app (sem dimensão).
+    /// `None` = app total (no dimension).
     pub version_code: Option<String>,
     pub rate: Option<f64>,
     pub user_perceived_rate: Option<f64>,
@@ -190,7 +190,7 @@ fn ymd(d: NaiveDate) -> serde_json::Value {
     json!({ "year": d.year(), "month": d.month(), "day": d.day() })
 }
 
-/// Série diária `[start, end)`. Fuso: o padrão do metric set (America/Los_Angeles).
+/// Daily series `[start, end)`. Time zone: the metric set default (America/Los_Angeles).
 pub async fn query_daily(
     http: &GoogleHttp,
     token: &str,
@@ -298,7 +298,7 @@ struct IssuesPage {
     next_page_token: Option<String>,
 }
 
-/// Issues mais frequentes (janela padrão da API), ordenados por número de relatórios.
+/// Most frequent issues (API default window), ordered by report count.
 pub async fn search_issues(
     http: &GoogleHttp,
     token: &str,
@@ -340,7 +340,7 @@ struct ReportsPage {
     error_reports: Vec<ErrorReport>,
 }
 
-/// Texto de um relatório de amostra do issue (stack ou dump de ANR).
+/// Text of a sample report of the issue (stack or ANR dump).
 pub async fn sample_report(
     http: &GoogleHttp,
     token: &str,

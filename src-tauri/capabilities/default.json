@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissões mínimas da janela principal: só os comandos do Stackquake. Nenhum plugin (rede, arquivos, shell) é exposto à interface.",
+  "description": "Minimal permissions for the main window: Stackquake commands only. No plugin (network, files, shell) is exposed to the UI.",
   "windows": ["main"],
   "permissions": [
     "allow-get-setup-status",

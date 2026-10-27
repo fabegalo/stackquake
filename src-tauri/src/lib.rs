@@ -22,7 +22,7 @@ pub struct AppState {
     pub http: http::GoogleHttp,
     pub data_dir: PathBuf,
     pub kpi_dir: PathBuf,
-    /// Banco da conta conectada (`None` quando ninguém está conectado).
+    /// Database of the signed-in account (`None` when nobody is signed in).
     db: RwLock<Option<Arc<db::Db>>>,
     pub sync_lock: tokio::sync::Mutex<()>,
 }
@@ -31,12 +31,12 @@ impl AppState {
     pub fn db(&self) -> AppResult<Arc<db::Db>> {
         self.db
             .read()
-            .map_err(|_| AppError::Db("estado indisponível".into()))?
+            .map_err(|_| AppError::Db("state unavailable".into()))?
             .clone()
             .ok_or(AppError::NotSignedIn)
     }
 
-    /// Abre o banco desta conta, em `accounts/<id>/`, com chave própria.
+    /// Opens this account's database in `accounts/<id>/`, with its own key.
     pub fn open_account(&self, account: &auth::Account) -> AppResult<()> {
         let local_id = account.local_id();
         let dir = self.data_dir.join("accounts").join(&local_id);
@@ -44,7 +44,7 @@ impl AppState {
         *self
             .db
             .write()
-            .map_err(|_| AppError::Db("estado indisponível".into()))? = Some(Arc::new(db));
+            .map_err(|_| AppError::Db("state unavailable".into()))? = Some(Arc::new(db));
         Ok(())
     }
 
@@ -55,7 +55,7 @@ impl AppState {
     }
 }
 
-/// Remove o banco do formato antigo (antes de existir um banco por conta).
+/// Removes the legacy database (from before one database per account).
 fn remove_legacy_data(data_dir: &std::path::Path) {
     for suffix in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(data_dir.join(format!("stackquake.db{suffix}")));
@@ -66,8 +66,8 @@ fn remove_legacy_data(data_dir: &std::path::Path) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        // Usado só pelo núcleo (abrir o navegador do login e a pasta de KPIs);
-        // nenhuma permissão do opener é dada à interface.
+        // Used only by the core (opening the sign-in browser and the KPI folder);
+        // no opener permission is granted to the UI.
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
@@ -83,7 +83,7 @@ pub fn run() {
                 db: RwLock::new(None),
                 sync_lock: tokio::sync::Mutex::new(()),
             };
-            // Reabre o banco da última conta conectada, se houver.
+            // Reopens the database of the last signed-in account, if any.
             if state.auth.is_signed_in().unwrap_or(false) {
                 if let Ok(Some(account)) = auth::Account::current() {
                     let _ = state.open_account(&account);
@@ -110,5 +110,5 @@ pub fn run() {
             commands::reset_local_data,
         ])
         .run(tauri::generate_context!())
-        .expect("erro ao iniciar o Stackquake");
+        .expect("error while starting Stackquake");
 }

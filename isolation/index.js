@@ -1,6 +1,6 @@
-// Padrão Isolation do Tauri: toda chamada IPC da interface passa por aqui,
-// num iframe isolado, antes de chegar ao núcleo Rust. Mantenha esta lista
-// igual a COMMANDS em src-tauri/build.rs.
+// Tauri Isolation pattern: every IPC call from the UI passes through here, in
+// an isolated iframe, before reaching the Rust core. Keep this list identical
+// to COMMANDS in src-tauri/build.rs.
 const ALLOWED = new Set([
   "get_setup_status",
   "sign_in",
@@ -21,7 +21,7 @@ const ALLOWED = new Set([
 
 window.__TAURI_ISOLATION_HOOK__ = (payload) => {
   if (!payload || typeof payload.cmd !== "string" || !ALLOWED.has(payload.cmd)) {
-    throw new Error("Stackquake: comando IPC bloqueado");
+    throw new Error("Stackquake: IPC command blocked");
   }
   return payload;
 };

@@ -1,8 +1,9 @@
 <script lang="ts">
-  // Gráfico de linhas em SVG puro (sem biblioteca externa): taxas percebidas
-  // de falha e ANR por dia, com as linhas de limite do Play.
+  // Plain SVG line chart (no external library): daily user-perceived crash
+  // and ANR rates, with Play's threshold lines.
   import type { Cell } from "../lib/api";
   import { pct } from "../lib/format";
+  import { t } from "../lib/i18n/index.svelte";
 
   let { rows }: { rows: Record<string, Cell>[] } = $props();
 
@@ -15,8 +16,8 @@
   const series = $derived(
     rows.map((r) => ({
       day: String(r.day ?? ""),
-      crash: typeof r.crash_percebida === "number" ? r.crash_percebida : null,
-      anr: typeof r.anr_percebida === "number" ? r.anr_percebida : null,
+      crash: typeof r.perceived_crash_rate === "number" ? r.perceived_crash_rate : null,
+      anr: typeof r.perceived_anr_rate === "number" ? r.perceived_anr_rate : null,
     })),
   );
 
@@ -47,9 +48,9 @@
 </script>
 
 {#if series.length === 0}
-  <p class="muted">Sem dados diários do Play ainda. Clique em Sincronizar.</p>
+  <p class="muted">{t("chart.empty")}</p>
 {:else}
-  <svg viewBox="0 0 {W} {H}" role="img" aria-label="Taxas diárias percebidas de falha e ANR">
+  <svg viewBox="0 0 {W} {H}" role="img" aria-label={t("chart.aria")}>
     {#each ticks as t}
       <line class="grid" x1={PAD.l} x2={W - PAD.r} y1={y(t)} y2={y(t)} />
       <text class="axis" x={PAD.l - 6} y={y(t) + 4} text-anchor="end">{pct(t, 1)}</text>
@@ -65,9 +66,9 @@
     {/each}
   </svg>
   <div class="row small legend">
-    <span class="crash">━ Falhas percebidas</span>
-    <span class="anr">━ ANRs percebidos</span>
-    <span class="muted">┄ limites do Play (1,09% e 0,47%)</span>
+    <span class="crash">{t("chart.crashes")}</span>
+    <span class="anr">{t("chart.anrs")}</span>
+    <span class="muted">{t("chart.thresholds")}</span>
   </div>
 {/if}
 

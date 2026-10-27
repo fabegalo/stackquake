@@ -1,5 +1,5 @@
-//! Comandos IPC: a única interface entre a UI e o núcleo. Toda entrada é
-//! validada aqui; nenhum comando devolve tokens ou segredos.
+//! IPC commands: the only interface between the UI and the core. All input is
+//! validated here; no command ever returns tokens or secrets.
 
 use serde::Serialize;
 use tauri::{AppHandle, State};
@@ -17,9 +17,7 @@ fn days(d: i64) -> AppResult<i64> {
     if (1..=365).contains(&d) {
         Ok(d)
     } else {
-        Err(AppError::Invalid(
-            "janela deve ter entre 1 e 365 dias".into(),
-        ))
+        Err(AppError::invalid("invalid_days"))
     }
 }
 
@@ -48,7 +46,7 @@ pub async fn get_setup_status(state: State<'_, AppState>) -> AppResult<SetupStat
 #[tauri::command]
 pub async fn sign_in(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     let account = state.auth.sign_in(&app, &state.http).await?;
-    // Cada conta abre o próprio banco: dados de contas diferentes nunca se misturam.
+    // Each account opens its own database: data from different accounts never mixes.
     state.open_account(&account)
 }
 
@@ -77,9 +75,9 @@ pub async fn refresh_apps(state: State<'_, AppState>) -> AppResult<Vec<AppRow>> 
             )
         })
         .collect();
-    // Remove da lista local apps que não estão mais nesta conta.
+    // Removes from the local list apps that are no longer in this account.
     db.replace_apps(&rows)?;
-    // Encontra sozinho o projeto Firebase de cada app (sem digitar ID).
+    // Finds each app's Firebase project automatically (no ID to type).
     let ctx = Ctx {
         http: &state.http,
         db: &db,
@@ -105,7 +103,7 @@ pub async fn sync_app(state: State<'_, AppState>, package_name: String) -> AppRe
     let _guard = state
         .sync_lock
         .try_lock()
-        .map_err(|_| AppError::Invalid("já existe uma sincronização em andamento".into()))?;
+        .map_err(|_| AppError::invalid("sync_in_progress"))?;
     let db = state.db()?;
     let token = state.auth.access_token(&state.http).await?;
     let ctx = Ctx {
@@ -137,7 +135,7 @@ pub async fn run_kpi(
         .into_iter()
         .find(|(info, _)| info.id == id)
         .map(|(_, sql)| sql)
-        .ok_or_else(|| AppError::Invalid("KPI não encontrado".into()))?;
+        .ok_or_else(|| AppError::invalid("kpi_not_found"))?;
     let db = state.db()?;
     tauri::async_runtime::spawn_blocking(move || kpi::run(&db, &sql, &pkg, days))
         .await
@@ -158,7 +156,7 @@ pub async fn list_problems(
     }
     if let Some(k) = kind.as_deref() {
         if !matches!(k, "crash" | "anr" | "nonfatal") {
-            return Err(AppError::Invalid("tipo inválido".into()));
+            return Err(AppError::invalid("invalid_kind"));
         }
     }
     state.db()?.list_problems(
@@ -186,16 +184,14 @@ pub async fn update_problem(
     resolved_in_version: Option<String>,
 ) -> AppResult<()> {
     let status = validate::status(&status)?;
-    let assignee = validate::text(assignee, 200, "responsável")?;
-    let notes = validate::text(notes, 20_000, "notas")?;
-    let resolved = validate::text(resolved_in_version, 20, "versão")?;
+    let assignee = validate::text(assignee, 200, "assignee")?;
+    let notes = validate::text(notes, 20_000, "notes")?;
+    let resolved = validate::text(resolved_in_version, 20, "resolved_version")?;
     if resolved
         .as_deref()
         .is_some_and(|v| !v.chars().all(|c| c.is_ascii_digit()))
     {
-        return Err(AppError::Invalid(
-            "versão da correção deve ser o versionCode (só números)".into(),
-        ));
+        return Err(AppError::invalid("invalid_resolved_version"));
     }
     state
         .db()?
@@ -219,16 +215,16 @@ pub async fn open_kpi_folder(app: AppHandle, state: State<'_, AppState>) -> AppR
     kpi::ensure_user_dir(&state.kpi_dir)?;
     app.opener()
         .open_path(state.kpi_dir.to_string_lossy(), None::<&str>)
-        .map_err(|e| AppError::Other(format!("não foi possível abrir a pasta: {e}")))
+        .map_err(|e| AppError::known_with("open_folder_failed", vec![("detail", e.to_string())]))
 }
 
-/// Apaga todos os dados locais desta conta (banco + chave) e sai da conta.
+/// Deletes all local data of this account (database + key) and signs out.
 #[tauri::command]
 pub async fn reset_local_data(state: State<'_, AppState>) -> AppResult<()> {
     let _guard = state
         .sync_lock
         .try_lock()
-        .map_err(|_| AppError::Invalid("aguarde a sincronização terminar".into()))?;
+        .map_err(|_| AppError::invalid("sync_in_progress"))?;
     state.db()?.wipe()?;
     state.close_account();
     state.auth.sign_out(&state.http).await

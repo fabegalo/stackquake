@@ -1,7 +1,7 @@
 [package]
 name = "stackquake"
 version = "0.1.0"
-description = "Gestão unificada de falhas e ANRs (Play Console + Firebase Crashlytics)"
+description = "Unified crash and ANR management for Android apps (Play Console + Firebase Crashlytics)"
 authors = ["Stackquake contributors"]
 license = "Apache-2.0"
 edition = "2021"
@@ -20,10 +20,10 @@ tauri = { version = "2.12.5", features = ["isolation"] }
 tauri-plugin-opener = "2.7.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-# Sem TLS nativo do sistema: rustls, só HTTPS, sem redirecionamentos (ver http.rs).
+# No native system TLS: rustls, HTTPS only, no redirects (see http.rs).
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "form", "query", "http2"] }
 tokio = { version = "1.54.1", features = ["net", "io-util", "time", "sync", "macros"] }
-# Chaveiro do sistema: Keychain (macOS), Credential Manager (Windows), Secret Service (Linux).
+# System keychain: Keychain (macOS), Credential Manager (Windows), Secret Service (Linux).
 keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 sha2 = "0.11.1"
 base64 = "0.23.1"
@@ -34,8 +34,8 @@ regex = "1.13.1"
 thiserror = "2.0.21"
 zeroize = "1.9.1"
 
-# Banco local criptografado com SQLCipher. No macOS usa o CommonCrypto do sistema;
-# nos demais o OpenSSL é compilado junto (sem depender da versão da distro).
+# Local database encrypted with SQLCipher. On macOS it uses the system CommonCrypto;
+# elsewhere OpenSSL is vendored (no dependency on the distro's version).
 [target.'cfg(target_os = "macos")'.dependencies]
 rusqlite = { version = "0.41.0", features = ["bundled-sqlcipher", "hooks"] }
 

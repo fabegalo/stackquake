@@ -1,4 +1,4 @@
-//! Validação de tudo que vem da interface ou de uma API e vira parte de uma URL.
+//! Validation of everything that comes from the UI or an API and becomes part of a URL.
 
 use std::sync::LazyLock;
 
@@ -8,10 +8,10 @@ use crate::error::{AppError, AppResult};
 
 static PACKAGE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$").unwrap());
-// IDs de projeto do Google Cloud: 6–30 caracteres, minúsculas, dígitos e hífen.
+// Google Cloud project IDs: 6–30 chars, lowercase letters, digits and hyphens.
 static PROJECT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$").unwrap());
-// App ID do Firebase para Android: `1:<número do projeto>:android:<hex>`.
+// Firebase Android App ID: `1:<project number>:android:<hex>`.
 static FIREBASE_APP_ID: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^1:[0-9]{1,20}:android:[0-9a-f]{1,64}$").unwrap());
 static ISSUE_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_-]{1,128}$").unwrap());
@@ -20,7 +20,7 @@ pub fn package(s: &str) -> AppResult<&str> {
     if s.len() <= 255 && PACKAGE.is_match(s) {
         Ok(s)
     } else {
-        Err(AppError::Invalid("nome de pacote inválido".into()))
+        Err(AppError::invalid("invalid_package"))
     }
 }
 
@@ -28,9 +28,7 @@ pub fn project(s: &str) -> AppResult<&str> {
     if PROJECT.is_match(s) {
         Ok(s)
     } else {
-        Err(AppError::Invalid(
-            "ID de projeto inválido (use o ID, não o nome; ex.: meu-app-1a2b3)".into(),
-        ))
+        Err(AppError::invalid("invalid_project"))
     }
 }
 
@@ -38,7 +36,7 @@ pub fn firebase_app_id(s: &str) -> AppResult<&str> {
     if FIREBASE_APP_ID.is_match(s) {
         Ok(s)
     } else {
-        Err(AppError::Invalid("App ID do Firebase inválido".into()))
+        Err(AppError::invalid("invalid_firebase_app_id"))
     }
 }
 
@@ -46,22 +44,23 @@ pub fn issue_id(s: &str) -> AppResult<&str> {
     if ISSUE_ID.is_match(s) {
         Ok(s)
     } else {
-        Err(AppError::Invalid("ID de issue inválido".into()))
+        Err(AppError::invalid("invalid_issue_id"))
     }
 }
 
 pub fn status(s: &str) -> AppResult<&str> {
     match s {
         "open" | "investigating" | "resolved" | "ignored" | "regressed" => Ok(s),
-        _ => Err(AppError::Invalid("status inválido".into())),
+        _ => Err(AppError::invalid("invalid_status")),
     }
 }
 
-pub fn text(s: Option<String>, max: usize, field: &str) -> AppResult<Option<String>> {
+pub fn text(s: Option<String>, max: usize, field: &'static str) -> AppResult<Option<String>> {
     match s {
-        Some(v) if v.chars().count() > max => Err(AppError::Invalid(format!(
-            "{field}: no máximo {max} caracteres"
-        ))),
+        Some(v) if v.chars().count() > max => Err(AppError::invalid_with(
+            "text_too_long",
+            vec![("field", field.to_string()), ("max", max.to_string())],
+        )),
         Some(v) if v.trim().is_empty() => Ok(None),
         other => Ok(other),
     }

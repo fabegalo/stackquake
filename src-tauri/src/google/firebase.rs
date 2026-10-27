@@ -1,6 +1,6 @@
-//! Firebase Management API: descobre em qual projeto Firebase está cada app
-//! Android da conta (e o App ID que a API do Crashlytics exige), para o usuário
-//! não precisar digitar nada.
+//! Firebase Management API: finds which Firebase project holds each Android app
+//! of the account (and the App ID the Crashlytics API requires), so users never
+//! have to type anything.
 
 use std::collections::HashMap;
 
@@ -14,16 +14,16 @@ use crate::validate;
 const BASE: &str = "https://firebase.googleapis.com/v1beta1/";
 const MAX_PROJECTS: usize = 200;
 
-/// Concatena em vez de usar `Url::join`: com `join`, um caminho como
-/// `apps:search` seria lido como uma URL absoluta de esquema `apps:`.
+/// Concatenates instead of using `Url::join`: with `join`, a path such as
+/// `apps:search` would be parsed as an absolute URL with scheme `apps:`.
 fn url(path: &str) -> Url {
-    Url::parse(&format!("{BASE}{path}")).expect("URL da API válida")
+    Url::parse(&format!("{BASE}{path}")).expect("valid API URL")
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FirebaseApp {
     pub project_id: String,
-    /// Ex.: `1:123456789:android:abc123`.
+    /// E.g. `1:123456789:android:abc123`.
     pub app_id: String,
 }
 
@@ -81,7 +81,7 @@ async fn list_projects(http: &GoogleHttp, token: &str) -> AppResult<Vec<String>>
     Ok(out)
 }
 
-/// `(pacote, app_id)` dos apps Android de um projeto.
+/// `(package, app_id)` of a project's Android apps.
 async fn android_apps(
     http: &GoogleHttp,
     token: &str,
@@ -112,8 +112,8 @@ async fn android_apps(
     Ok(out)
 }
 
-/// Mapa `pacote -> app Firebase` para os pacotes pedidos.
-/// Para assim que todos forem encontrados. Projetos sem permissão são ignorados.
+/// `package -> Firebase app` map for the requested packages.
+/// Stops once all are found. Projects without permission are skipped.
 pub async fn apps_for(
     http: &GoogleHttp,
     token: &str,

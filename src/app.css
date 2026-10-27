@@ -1,4 +1,4 @@
-/* Sem atributos style inline em lugar nenhum: a CSP usa style-src 'self'. */
+/* No inline style attributes anywhere: the CSP uses style-src 'self'. */
 :root {
   --bg: #f6f7f9;
   --panel: #ffffff;

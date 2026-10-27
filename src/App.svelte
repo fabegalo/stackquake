@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, errorText, type AppRow, type SetupStatus, type SyncReport } from "./lib/api";
   import { dateTime } from "./lib/format";
+  import { t } from "./lib/i18n/index.svelte";
   import Setup from "./views/Setup.svelte";
   import Dashboard from "./views/Dashboard.svelte";
   import Problems from "./views/Problems.svelte";
@@ -16,8 +17,9 @@
   let days = $state(28);
   let syncing = $state(false);
   let report = $state<SyncReport | null>(null);
-  let error = $state<string | null>(null);
-  // Incrementa a cada sincronização para as telas recarregarem.
+  // Raw error, translated at render time (follows language changes).
+  let error = $state<unknown>(null);
+  // Bumped on every sync so views reload.
   let version = $state(0);
 
   const current = $derived(apps.find((a) => a.packageName === selected) ?? null);
@@ -28,7 +30,7 @@
       status = await api.setupStatus();
       if (status.signedIn) await loadApps();
     } catch (e) {
-      error = errorText(e);
+      error = e;
     }
   }
 
@@ -50,7 +52,7 @@
       apps = await api.listApps();
       version++;
     } catch (e) {
-      error = errorText(e);
+      error = e;
     } finally {
       syncing = false;
     }
@@ -67,7 +69,7 @@
 
 {#if status === null}
   <main class="center">
-    {#if error}<p class="error">{error}</p>{:else}<p class="muted">Carregando…</p>{/if}
+    {#if error}<p class="error">{errorText(error)}</p>{:else}<p class="muted">{t("app.loading")}</p>{/if}
   </main>
 {:else if !status.hasClient || !status.signedIn}
   <Setup {status} onDone={loadStatus} />
@@ -84,58 +86,60 @@
         </select>
       </label>
       <nav>
-        <button class:active={view === "dashboard"} onclick={() => (view = "dashboard")}>Painel</button>
-        <button class:active={view === "problems"} onclick={() => (view = "problems")}>Problemas</button>
-        <button class:active={view === "kpis"} onclick={() => (view = "kpis")}>KPIs</button>
-        <button class:active={view === "settings"} onclick={() => (view = "settings")}>Configurações</button>
+        <button class:active={view === "dashboard"} onclick={() => (view = "dashboard")}>{t("nav.dashboard")}</button>
+        <button class:active={view === "problems"} onclick={() => (view = "problems")}>{t("nav.problems")}</button>
+        <button class:active={view === "kpis"} onclick={() => (view = "kpis")}>{t("nav.kpis")}</button>
+        <button class:active={view === "settings"} onclick={() => (view = "settings")}>{t("nav.settings")}</button>
       </nav>
       <div class="spacer"></div>
       {#if status.email}<p class="small muted account">{status.email}</p>{/if}
-      <p class="small muted">Dados só neste computador, criptografados e separados por conta.</p>
+      <p class="small muted">{t("app.privacyNote")}</p>
     </aside>
 
     <section class="main">
       <header class="row">
         <div>
-          <h1>{current?.displayName ?? current?.packageName ?? "Nenhum app"}</h1>
+          <h1>{current?.displayName ?? current?.packageName ?? t("header.noApp")}</h1>
           {#if current}
             <span class="small muted mono">{current.packageName}</span>
-            <span class="small muted"> · última sincronização: {dateTime(current.lastSyncAt)}</span>
+            <span class="small muted"> · {t("header.lastSync", { when: dateTime(current.lastSyncAt) })}</span>
           {/if}
         </div>
         <div class="spacer"></div>
         <label class="inline">
-          Janela
+          {t("header.window")}
           <select bind:value={days}>
-            <option value={7}>7 dias</option>
-            <option value={28}>28 dias</option>
-            <option value={90}>90 dias</option>
+            {#each [7, 28, 90] as n}<option value={n}>{t("header.days", { n })}</option>{/each}
           </select>
         </label>
         <button class="primary" onclick={sync} disabled={syncing || !selected}>
-          {syncing ? "Sincronizando…" : "Sincronizar"}
+          {syncing ? t("header.syncing") : t("header.sync")}
         </button>
       </header>
 
-      {#if error}<div class="panel error">{error}</div>{/if}
+      {#if error}<div class="panel error">{errorText(error)}</div>{/if}
       {#if report}
         <div class="panel small">
           <div class="row">
-            <span>Play Vitals: {report.vitalsRows} linhas</span>
-            <span>Issues do Play: {report.playIssues}</span>
-            <span>Crashlytics: {report.crashlyticsIssues} issues, {report.crashlyticsVersions} versões</span>
-            {#if report.regressions > 0}<span class="bad">{report.regressions} regressão(ões)</span>{/if}
+            <span>{t("sync.vitals", { n: report.vitalsRows })}</span>
+            <span>{t("sync.playIssues", { n: report.playIssues })}</span>
+            <span>
+              {t("sync.crashlytics", { issues: report.crashlyticsIssues, versions: report.crashlyticsVersions })}
+            </span>
+            {#if report.regressions > 0}<span class="bad">{t("sync.regressions", { n: report.regressions })}</span>{/if}
             <div class="spacer"></div>
-            <button class="link" onclick={() => (report = null)}>fechar</button>
+            <button class="link" onclick={() => (report = null)}>{t("header.close")}</button>
           </div>
-          {#each report.warnings as w}<p class="warn">{w}</p>{/each}
+          {#each report.warnings as w}
+            <p class="warn">{t(`sync.source.${w.source}`)}: {errorText(w.error)}</p>
+          {/each}
         </div>
       {/if}
 
       {#if !selected}
         <div class="panel">
-          <p>Nenhum app encontrado na sua conta do Play Console.</p>
-          <button onclick={() => (view = "settings")}>Abrir configurações</button>
+          <p>{t("empty.noApps")}</p>
+          <button onclick={() => (view = "settings")}>{t("empty.openSettings")}</button>
         </div>
       {:else if view === "dashboard"}
         {#key `${selected}-${days}-${version}`}<Dashboard packageName={selected} {days} />{/key}

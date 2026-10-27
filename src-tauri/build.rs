@@ -1,5 +1,5 @@
-// Declara os comandos do app para que o Tauri gere uma permissão por comando.
-// Comandos não listados em capabilities/default.json ficam bloqueados para a interface.
+// Declares the app commands so Tauri generates one permission per command.
+// Commands not listed in capabilities/default.json are blocked for the UI.
 const COMMANDS: &[&str] = &[
     "get_setup_status",
     "sign_in",
@@ -20,43 +20,43 @@ const COMMANDS: &[&str] = &[
 
 const CLIENT_FILE: &str = "google-oauth-client.json";
 
-/// Embute o cliente OAuth do app no binário, para o usuário final só clicar em
-/// "Entrar com Google". Fontes, em ordem:
-/// 1. variáveis STACKQUAKE_GOOGLE_CLIENT_ID / STACKQUAKE_GOOGLE_CLIENT_SECRET (CI);
-/// 2. o arquivo src-tauri/google-oauth-client.json baixado do Google Cloud
-///    (fica fora do git, ver .gitignore).
+/// Embeds the app's OAuth client in the binary, so end users only click
+/// "Sign in with Google". Sources, in order:
+/// 1. STACKQUAKE_GOOGLE_CLIENT_ID / STACKQUAKE_GOOGLE_CLIENT_SECRET env vars (CI);
+/// 2. src-tauri/google-oauth-client.json downloaded from Google Cloud
+///    (kept out of git, see .gitignore).
 fn embed_oauth_client() {
     println!("cargo:rerun-if-env-changed=STACKQUAKE_GOOGLE_CLIENT_ID");
     println!("cargo:rerun-if-env-changed=STACKQUAKE_GOOGLE_CLIENT_SECRET");
     println!("cargo:rerun-if-changed={CLIENT_FILE}");
 
     if std::env::var("STACKQUAKE_GOOGLE_CLIENT_ID").is_ok() {
-        return; // option_env! lê direto do ambiente
+        return; // option_env! reads straight from the environment
     }
     let Ok(raw) = std::fs::read_to_string(CLIENT_FILE) else {
         println!(
-            "cargo:warning=Sem cliente OAuth do Google: o login ficará desativado neste build. Veja docs/DESENVOLVIMENTO.md"
+            "cargo:warning=No Google OAuth client: sign-in is disabled in this build. See docs/DEVELOPMENT.md"
         );
         return;
     };
     let v: serde_json::Value =
-        serde_json::from_str(&raw).unwrap_or_else(|_| panic!("{CLIENT_FILE} não é um JSON válido"));
+        serde_json::from_str(&raw).unwrap_or_else(|_| panic!("{CLIENT_FILE} is not valid JSON"));
     let c = v.get("installed").unwrap_or_else(|| {
-        panic!("{CLIENT_FILE}: o cliente precisa ser do tipo 'App para computador' (chave \"installed\")")
+        panic!("{CLIENT_FILE}: the client must be of type 'Desktop app' (\"installed\" key)")
     });
     let field = |k: &str| -> String {
         let s = c[k].as_str().unwrap_or_default();
-        // Só caracteres seguros: o valor vira uma variável de compilação.
+        // Safe characters only: the value becomes a compile-time variable.
         assert!(
             !s.is_empty() && s.len() < 200 && s.chars().all(|ch| ch.is_ascii_graphic()),
-            "{CLIENT_FILE}: campo {k} ausente ou inválido"
+            "{CLIENT_FILE}: field {k} missing or invalid"
         );
         s.to_string()
     };
     let id = field("client_id");
     assert!(
         id.ends_with(".apps.googleusercontent.com"),
-        "{CLIENT_FILE}: client_id inválido"
+        "{CLIENT_FILE}: invalid client_id"
     );
     println!("cargo:rustc-env=STACKQUAKE_GOOGLE_CLIENT_ID={id}");
     println!(
@@ -71,5 +71,5 @@ fn main() {
         tauri_build::Attributes::new()
             .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),
     )
-    .expect("falha ao gerar o contexto do Tauri");
+    .expect("failed to generate the Tauri context");
 }

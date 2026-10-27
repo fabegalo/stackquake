@@ -1,6 +1,7 @@
-// Wrappers tipados dos comandos do núcleo Rust. A interface não tem acesso a
-// rede, arquivos ou tokens: tudo passa por estes comandos.
+// Typed wrappers for the Rust core commands. The UI has no access to the
+// network, files or tokens: everything goes through these commands.
 import { invoke } from "@tauri-apps/api/core";
+import { i18n, t, tMaybe } from "./i18n/index.svelte";
 
 export type Kind = "crash" | "anr" | "nonfatal";
 export type Status = "open" | "investigating" | "resolved" | "ignored" | "regressed";
@@ -26,14 +27,37 @@ export interface SyncReport {
   crashlyticsIssues: number;
   crashlyticsVersions: number;
   regressions: number;
-  warnings: string[];
+  warnings: SyncWarning[];
+}
+
+/** Error sent by the core: a stable code + params, translated by the UI. */
+export interface ErrorPayload {
+  code: string;
+  params: Record<string, string>;
+  message: string;
+}
+
+export interface SyncWarning {
+  source: "play_vitals" | "play_issues" | "crashlytics";
+  error: ErrorPayload;
 }
 
 export interface KpiInfo {
   id: string;
   name: string;
   description: string;
+  names: Record<string, string>;
+  descriptions: Record<string, string>;
   source: "builtin" | "user";
+}
+
+/** KPI name/description in the current language (English fallback). */
+export function kpiName(k: KpiInfo): string {
+  return k.names[i18n.locale] ?? k.name;
+}
+
+export function kpiDescription(k: KpiInfo): string {
+  return k.descriptions[i18n.locale] ?? k.description;
 }
 
 export type Cell = string | number | null;
@@ -129,11 +153,23 @@ export const api = {
   resetLocalData: () => invoke<void>("reset_local_data"),
 };
 
-/** Converte um resultado de KPI em objetos (coluna -> valor). */
+/** Turns a KPI result into objects (column -> value). */
 export function rowsOf(r: KpiResult): Record<string, Cell>[] {
   return r.rows.map((row) => Object.fromEntries(r.columns.map((c, i) => [c, row[i] ?? null])));
 }
 
+function isPayload(e: unknown): e is ErrorPayload {
+  return typeof e === "object" && e !== null && typeof (e as ErrorPayload).code === "string";
+}
+
+/** Translates a core error (or any thrown value) into user-facing text. */
 export function errorText(e: unknown): string {
-  return typeof e === "string" ? e : e instanceof Error ? e.message : "Erro inesperado";
+  if (isPayload(e)) {
+    const params: Record<string, string> = { ...e.params };
+    if (params.field) params.field = tMaybe(`field.${params.field}`) ?? params.field;
+    return tMaybe(`errors.${e.code}`) ? t(`errors.${e.code}`, params) : e.message;
+  }
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message;
+  return t("errors.unknown");
 }

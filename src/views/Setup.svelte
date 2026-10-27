@@ -1,10 +1,11 @@
 <script lang="ts">
   import { api, errorText, type SetupStatus } from "../lib/api";
+  import { i18n, LOCALES, setLocale, t, type Locale } from "../lib/i18n/index.svelte";
 
   let { status, onDone }: { status: SetupStatus; onDone: () => void } = $props();
 
   let busy = $state(false);
-  let error = $state<string | null>(null);
+  let error = $state<unknown>(null);
 
   async function signIn() {
     busy = true;
@@ -13,7 +14,7 @@
       await api.signIn();
       onDone();
     } catch (e) {
-      error = errorText(e);
+      error = e;
     } finally {
       busy = false;
     }
@@ -23,26 +24,27 @@
 <main>
   <div class="panel stack card">
     <div class="brand">Stackquake</div>
-    <p class="muted">
-      Falhas e ANRs do Play Console e do Firebase Crashlytics em um só lugar.
-    </p>
+    <p class="muted">{t("app.tagline")}</p>
 
     {#if status.hasClient}
       <button class="primary big" onclick={signIn} disabled={busy}>
-        {busy ? "Continue no navegador…" : "Entrar com Google"}
+        {busy ? t("setup.waiting") : t("setup.signIn")}
       </button>
-      <p class="small muted">
-        Use a mesma conta do Play Console. O acesso é só de leitura e os dados ficam apenas neste
-        computador, criptografados.
-      </p>
+      <p class="small muted">{t("setup.hint")}</p>
     {:else}
-      <p class="error">
-        Este build não tem o login do Google configurado. Se você compilou o Stackquake, veja
-        docs/DESENVOLVIMENTO.md.
-      </p>
+      <p class="error">{t("setup.noClient")}</p>
     {/if}
 
-    {#if error}<p class="error">{error}</p>{/if}
+    {#if error}<p class="error">{errorText(error)}</p>{/if}
+
+    <select
+      class="small"
+      aria-label="Language"
+      value={i18n.locale}
+      onchange={(e) => setLocale(e.currentTarget.value as Locale)}
+    >
+      {#each LOCALES as l}<option value={l.id}>{l.label}</option>{/each}
+    </select>
   </div>
 </main>
 
