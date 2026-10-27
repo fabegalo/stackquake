@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-run-kpi"
+description = "Enables the run_kpi command without any pre-configured scope."
+commands.allow = ["run_kpi"]
+
+[[permission]]
+identifier = "deny-run-kpi"
+description = "Denies the run_kpi command without any pre-configured scope."
+commands.deny = ["run_kpi"]

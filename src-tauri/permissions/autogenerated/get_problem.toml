@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-problem"
+description = "Enables the get_problem command without any pre-configured scope."
+commands.allow = ["get_problem"]
+
+[[permission]]
+identifier = "deny-get-problem"
+description = "Denies the get_problem command without any pre-configured scope."
+commands.deny = ["get_problem"]

@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissões mínimas da janela principal: só os comandos do Stackquake. Nenhum plugin (rede, arquivos, shell) é exposto à interface.",
+  "windows": ["main"],
+  "permissions": [
+    "allow-get-setup-status",
+    "allow-sign-in",
+    "allow-sign-out",
+    "allow-list-apps",
+    "allow-refresh-apps",
+    "allow-update-app-settings",
+    "allow-sync-app",
+    "allow-list-kpis",
+    "allow-run-kpi",
+    "allow-list-problems",
+    "allow-get-problem",
+    "allow-update-problem",
+    "allow-fetch-problem-sample",
+    "allow-open-kpi-folder",
+    "allow-reset-local-data"
+  ]
+}

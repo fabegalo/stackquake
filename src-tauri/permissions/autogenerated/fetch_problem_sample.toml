@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-fetch-problem-sample"
+description = "Enables the fetch_problem_sample command without any pre-configured scope."
+commands.allow = ["fetch_problem_sample"]
+
+[[permission]]
+identifier = "deny-fetch-problem-sample"
+description = "Denies the fetch_problem_sample command without any pre-configured scope."
+commands.deny = ["fetch_problem_sample"]

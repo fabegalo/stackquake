@@ -1,0 +1,1086 @@
+//! Banco local criptografado (SQLCipher, AES-256), um por conta Google. Cada
+//! conta tem a própria pasta e a própria chave de 256 bits (gerada pelo SO e
+//! guardada só no chaveiro do sistema).
+
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+use rusqlite::{named_params, params, Connection, OpenFlags, OptionalExtension};
+use serde::Serialize;
+use zeroize::Zeroizing;
+
+use crate::error::{AppError, AppResult};
+use crate::secrets;
+
+const SCHEMA: &str = include_str!("../sql/schema.sql");
+const SCHEMA_VERSION: i64 = 1;
+const PROBLEMS_SQL: &str = include_str!("../sql/problems.sql");
+const DB_FILE: &str = "stackquake.db";
+
+pub struct Db {
+    dir: PathBuf,
+    path: PathBuf,
+    key_name: String,
+    conn: Mutex<Connection>,
+}
+
+fn hex(bytes: &[u8]) -> Zeroizing<String> {
+    const H: &[u8; 16] = b"0123456789abcdef";
+    let mut s = Zeroizing::new(String::with_capacity(bytes.len() * 2));
+    for b in bytes {
+        s.push(H[(b >> 4) as usize] as char);
+        s.push(H[(b & 0xf) as usize] as char);
+    }
+    s
+}
+
+fn now() -> String {
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+/// Pasta acessível só pelo usuário atual.
+pub fn private_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+/// Aplica a chave do SQLCipher e confere se ela abre o banco.
+fn unlock(conn: &Connection, key_hex: &str) -> AppResult<()> {
+    // key_hex é gerado por nós (só [0-9a-f]), então pode ir no texto do PRAGMA.
+    debug_assert!(key_hex.bytes().all(|b| b.is_ascii_hexdigit()));
+    conn.execute_batch(&Zeroizing::new(format!("PRAGMA key = \"x'{key_hex}'\";")))?;
+    conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+        r.get::<_, i64>(0)
+    })
+    .map_err(|_| {
+        AppError::Db(
+            "não foi possível abrir o banco local (chave incorreta ou arquivo corrompido)".into(),
+        )
+    })?;
+    Ok(())
+}
+
+/// Autorizador dos KPIs: só leitura; todo o resto (escrita, ATTACH, PRAGMA,
+/// criação de objetos) é negado já na preparação da consulta.
+fn kpi_authorizer(ctx: AuthContext<'_>) -> Authorization {
+    match ctx.action {
+        AuthAction::Select
+        | AuthAction::Read { .. }
+        | AuthAction::Function { .. }
+        | AuthAction::Recursive => Authorization::Allow,
+        _ => Authorization::Deny,
+    }
+}
+
+fn remove_db_files(path: &Path) -> std::io::Result<()> {
+    for suffix in ["", "-wal", "-shm"] {
+        let p = PathBuf::from(format!("{}{suffix}", path.display()));
+        if p.exists() {
+            std::fs::remove_file(p)?;
+        }
+    }
+    Ok(())
+}
+
+fn db_key(path: &Path, key_name: &str) -> AppResult<Zeroizing<String>> {
+    if let Some(k) = secrets::get(key_name)? {
+        return Ok(k);
+    }
+    // Sem a chave o arquivo é ilegível para sempre: recomeça do zero.
+    remove_db_files(path)?;
+    let key = hex(&*secrets::random_bytes::<32>()?);
+    secrets::set(key_name, &key)?;
+    Ok(key)
+}
+
+fn open_rw(path: &Path, key_name: &str) -> AppResult<Connection> {
+    let key = db_key(path, key_name)?;
+    let conn = Connection::open(path)?;
+    unlock(&conn, &key)?;
+    conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
+    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;")?;
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version < SCHEMA_VERSION {
+        conn.execute_batch(SCHEMA)?;
+        conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
+    }
+    Ok(conn)
+}
+
+// ---------- tipos expostos à interface ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppRow {
+    pub package_name: String,
+    pub display_name: Option<String>,
+    pub firebase_project: Option<String>,
+    #[serde(skip)]
+    pub firebase_app_id: Option<String>,
+    pub enabled: bool,
+    pub last_sync_at: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProblemRow {
+    pub id: i64,
+    pub kind: String,
+    pub title: String,
+    pub status: String,
+    pub assignee: Option<String>,
+    pub sources: String,
+    pub play_reports: Option<i64>,
+    pub play_users: Option<i64>,
+    pub cl_events: Option<i64>,
+    pub cl_users: Option<i64>,
+    pub first_version: Option<i64>,
+    pub last_version: Option<i64>,
+    pub last_seen: Option<String>,
+    pub impact: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProblemCore {
+    pub id: i64,
+    pub package_name: String,
+    pub signature: String,
+    pub kind: String,
+    pub title: String,
+    pub status: String,
+    pub assignee: Option<String>,
+    pub notes: Option<String>,
+    pub resolved_in_version: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayIssueRow {
+    pub issue_id: String,
+    pub cause: Option<String>,
+    pub location: Option<String>,
+    pub report_count: Option<i64>,
+    pub distinct_users: Option<i64>,
+    pub first_version: Option<String>,
+    pub last_version: Option<String>,
+    pub last_seen: Option<String>,
+    pub issue_uri: Option<String>,
+    pub sample_report: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClIssueRow {
+    pub issue_id: String,
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub root_type: Option<String>,
+    pub blame_symbol: Option<String>,
+    pub first_version: Option<String>,
+    pub last_version: Option<String>,
+    pub first_seen: Option<String>,
+    pub last_seen: Option<String>,
+    pub issue_uri: Option<String>,
+    pub sample_stack: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionCount {
+    pub build_version: String,
+    pub display_version: Option<String>,
+    pub events: i64,
+    pub users: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProblemDetail {
+    pub problem: ProblemCore,
+    pub play_issues: Vec<PlayIssueRow>,
+    pub crashlytics_issues: Vec<ClIssueRow>,
+    pub by_version: Vec<VersionCount>,
+}
+
+// ---------- tipos de entrada (vindos dos conectores) ----------
+
+pub struct VitalsIn {
+    pub day: String,
+    pub version_code: String,
+    pub rate: Option<f64>,
+    pub user_perceived_rate: Option<f64>,
+    pub distinct_users: Option<i64>,
+}
+
+pub struct PlayIssueIn {
+    pub issue_id: String,
+    pub kind: String,
+    pub cause: Option<String>,
+    pub location: Option<String>,
+    pub title: String,
+    pub signature: String,
+    pub report_count: Option<i64>,
+    pub distinct_users: Option<i64>,
+    pub first_version: Option<String>,
+    pub last_version: Option<String>,
+    pub last_seen: Option<String>,
+    pub issue_uri: Option<String>,
+    pub sample_report: Option<String>,
+}
+
+pub struct ClIssueIn {
+    pub issue_id: String,
+    pub kind: String,
+    pub title: String,
+    pub subtitle: Option<String>,
+    /// Assinatura provisória, usada até o evento de amostra trazer o stack.
+    pub fallback_signature: String,
+    pub first_version: Option<String>,
+    pub last_version: Option<String>,
+    pub first_seen: Option<String>,
+    pub last_seen: Option<String>,
+    pub issue_uri: Option<String>,
+    pub sample_event: Option<String>,
+}
+
+pub struct ClIssueDetails {
+    pub issue_id: String,
+    pub root_type: Option<String>,
+    pub blame_symbol: Option<String>,
+    pub signature: String,
+    pub title: String,
+    pub stack: String,
+}
+
+pub struct ClDayIn {
+    pub key: String, // issue_id ou build_version
+    pub display_version: Option<String>,
+    pub day: String,
+    pub events: i64,
+    pub users: i64,
+    pub crash_free_users: Option<f64>,
+    pub crash_free_sessions: Option<f64>,
+}
+
+pub struct ProblemFilter {
+    pub days: i64,
+    pub status: Option<String>,
+    pub kind: Option<String>,
+}
+
+impl Db {
+    /// Abre (ou cria) o banco da conta na pasta indicada.
+    pub fn open(dir: &Path, key_name: &str) -> AppResult<Self> {
+        private_dir(dir)?;
+        let path = dir.join(DB_FILE);
+        let conn = open_rw(&path, key_name)?;
+        Ok(Self {
+            dir: dir.to_path_buf(),
+            path,
+            key_name: key_name.to_string(),
+            conn: Mutex::new(conn),
+        })
+    }
+
+    fn with<R>(&self, f: impl FnOnce(&mut Connection) -> AppResult<R>) -> AppResult<R> {
+        let mut guard = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Db("conexão indisponível".into()))?;
+        f(&mut guard)
+    }
+
+    /// Conexão separada, somente leitura e com autorizador restrito, para os
+    /// KPIs escritos pelo usuário: só SELECT/leitura/funções são permitidos
+    /// (sem ATTACH, PRAGMA, escrita ou criação de objetos).
+    pub fn open_kpi_connection(&self) -> AppResult<Connection> {
+        let key = secrets::get(&self.key_name)?
+            .ok_or_else(|| AppError::Db("chave do banco local ausente".into()))?;
+        let mut conn = Connection::open_with_flags(
+            &self.path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        unlock(&conn, &key)?;
+        conn.execute_batch("PRAGMA query_only = ON;")?;
+        // Se o autorizador não puder ser instalado, a conexão não é usada.
+        conn.authorizer(Some(kpi_authorizer))?;
+        Ok(conn)
+    }
+
+    /// Apaga de verdade todos os dados desta conta: fecha o banco, remove a
+    /// pasta inteira e apaga a chave do chaveiro. O objeto fica inutilizável.
+    pub fn wipe(&self) -> AppResult<()> {
+        self.with(|conn| {
+            *conn = Connection::open_in_memory()?;
+            if self.dir.exists() {
+                std::fs::remove_dir_all(&self.dir)?;
+            }
+            secrets::delete(&self.key_name)?;
+            Ok(())
+        })
+    }
+
+    // ---------- apps ----------
+
+    /// Grava a lista de apps da conta e remove os que não estão mais nela.
+    pub fn replace_apps(&self, apps: &[(String, Option<String>)]) -> AppResult<()> {
+        self.with(|conn| {
+            let tx = conn.transaction()?;
+            tx.execute_batch("CREATE TEMP TABLE IF NOT EXISTS keep_app (package_name TEXT PRIMARY KEY); DELETE FROM keep_app;")?;
+            for (pkg, name) in apps {
+                tx.execute(
+                    "INSERT INTO app (package_name, display_name) VALUES (?1, ?2)
+                     ON CONFLICT (package_name) DO UPDATE SET display_name = excluded.display_name",
+                    params![pkg, name],
+                )?;
+                tx.execute("INSERT OR IGNORE INTO keep_app VALUES (?1)", [pkg])?;
+            }
+            tx.execute(
+                "DELETE FROM app WHERE package_name NOT IN (SELECT package_name FROM keep_app)",
+                [],
+            )?;
+            tx.execute_batch("DROP TABLE keep_app;")?;
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    pub fn list_apps(&self) -> AppResult<Vec<AppRow>> {
+        self.with(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT package_name, display_name, firebase_project, firebase_app_id, enabled, last_sync_at
+                 FROM app ORDER BY COALESCE(display_name, package_name)",
+            )?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok(AppRow {
+                        package_name: r.get(0)?,
+                        display_name: r.get(1)?,
+                        firebase_project: r.get(2)?,
+                        firebase_app_id: r.get(3)?,
+                        enabled: r.get::<_, i64>(4)? != 0,
+                        last_sync_at: r.get(5)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+    }
+
+    pub fn get_app(&self, pkg: &str) -> AppResult<AppRow> {
+        self.list_apps()?
+            .into_iter()
+            .find(|a| a.package_name == pkg)
+            .ok_or_else(|| AppError::Invalid("app não encontrado; atualize a lista de apps".into()))
+    }
+
+    pub fn set_firebase_app(&self, pkg: &str, project: &str, app_id: &str) -> AppResult<()> {
+        self.with(|conn| {
+            conn.execute(
+                "UPDATE app SET firebase_project = ?2, firebase_app_id = ?3 WHERE package_name = ?1",
+                params![pkg, project, app_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn set_app_enabled(&self, pkg: &str, enabled: bool) -> AppResult<()> {
+        self.with(|conn| {
+            let n = conn.execute(
+                "UPDATE app SET enabled = ?2 WHERE package_name = ?1",
+                params![pkg, enabled as i64],
+            )?;
+            if n == 0 {
+                return Err(AppError::Invalid("app não encontrado".into()));
+            }
+            Ok(())
+        })
+    }
+
+    pub fn mark_synced(&self, pkg: &str) -> AppResult<()> {
+        self.with(|conn| {
+            conn.execute(
+                "UPDATE app SET last_sync_at = ?2 WHERE package_name = ?1",
+                params![pkg, now()],
+            )?;
+            Ok(())
+        })
+    }
+
+    // ---------- estado de sincronização ----------
+
+    pub fn cursor(&self, source: &str, pkg: &str) -> AppResult<Option<String>> {
+        self.with(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT cursor_day FROM sync_state WHERE source = ?1 AND package_name = ?2",
+                    params![source, pkg],
+                    |r| r.get(0),
+                )
+                .optional()?)
+        })
+    }
+
+    pub fn set_cursor(&self, source: &str, pkg: &str, day: &str) -> AppResult<()> {
+        self.with(|conn| {
+            conn.execute(
+                "INSERT INTO sync_state (source, package_name, cursor_day) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (source, package_name) DO UPDATE SET cursor_day = excluded.cursor_day",
+                params![source, pkg, day],
+            )?;
+            Ok(())
+        })
+    }
+
+    // ---------- Play ----------
+
+    pub fn upsert_vitals(&self, pkg: &str, metric_set: &str, rows: &[VitalsIn]) -> AppResult<()> {
+        self.with(|conn| {
+            let tx = conn.transaction()?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT INTO vitals_daily (package_name, metric_set, day, version_code, rate, user_perceived_rate, distinct_users)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                     ON CONFLICT (package_name, metric_set, day, version_code) DO UPDATE SET
+                       rate = excluded.rate, user_perceived_rate = excluded.user_perceived_rate,
+                       distinct_users = excluded.distinct_users",
+                )?;
+                for r in rows {
+                    stmt.execute(params![
+                        pkg,
+                        metric_set,
+                        r.day,
+                        r.version_code,
+                        r.rate,
+                        r.user_perceived_rate,
+                        r.distinct_users
+                    ])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    pub fn upsert_play_issues(&self, pkg: &str, issues: &[PlayIssueIn]) -> AppResult<()> {
+        let synced = now();
+        self.with(|conn| {
+            let tx = conn.transaction()?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT INTO play_issue (package_name, issue_id, kind, cause, location, title, signature,
+                       report_count, distinct_users, first_version, last_version, last_seen, issue_uri, sample_report, synced_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                     ON CONFLICT (package_name, issue_id) DO UPDATE SET
+                       kind = excluded.kind, cause = excluded.cause, location = excluded.location,
+                       title = excluded.title, signature = excluded.signature,
+                       report_count = excluded.report_count, distinct_users = excluded.distinct_users,
+                       first_version = excluded.first_version, last_version = excluded.last_version,
+                       last_seen = excluded.last_seen, issue_uri = excluded.issue_uri,
+                       sample_report = COALESCE(excluded.sample_report, play_issue.sample_report),
+                       synced_at = excluded.synced_at",
+                )?;
+                for i in issues {
+                    stmt.execute(params![
+                        pkg,
+                        i.issue_id,
+                        i.kind,
+                        i.cause,
+                        i.location,
+                        i.title,
+                        i.signature,
+                        i.report_count,
+                        i.distinct_users,
+                        i.first_version,
+                        i.last_version,
+                        i.last_seen,
+                        i.issue_uri,
+                        i.sample_report,
+                        synced
+                    ])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    pub fn play_sample(&self, pkg: &str, issue_id: &str) -> AppResult<Option<String>> {
+        self.with(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT sample_report FROM play_issue WHERE package_name = ?1 AND issue_id = ?2",
+                    params![pkg, issue_id],
+                    |r| r.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten())
+        })
+    }
+
+    pub fn set_play_sample(&self, pkg: &str, issue_id: &str, text: &str) -> AppResult<()> {
+        self.with(|conn| {
+            conn.execute(
+                "UPDATE play_issue SET sample_report = ?3 WHERE package_name = ?1 AND issue_id = ?2",
+                params![pkg, issue_id, text],
+            )?;
+            Ok(())
+        })
+    }
+
+    // ---------- Crashlytics ----------
+
+    /// Grava os issues. A assinatura provisória só é usada para issues novos;
+    /// a definitiva vem de `set_crashlytics_details`.
+    pub fn upsert_crashlytics_issues(&self, pkg: &str, issues: &[ClIssueIn]) -> AppResult<()> {
+        self.with(|conn| {
+            let tx = conn.transaction()?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT INTO crashlytics_issue (package_name, issue_id, kind, title, subtitle, signature,
+                       first_version, last_version, first_seen, last_seen, issue_uri, sample_event)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                     ON CONFLICT (package_name, issue_id) DO UPDATE SET
+                       kind = excluded.kind, subtitle = excluded.subtitle,
+                       first_version = excluded.first_version, last_version = excluded.last_version,
+                       first_seen = excluded.first_seen, last_seen = excluded.last_seen,
+                       issue_uri = excluded.issue_uri,
+                       sample_event = COALESCE(excluded.sample_event, crashlytics_issue.sample_event)",
+                )?;
+                for i in issues {
+                    stmt.execute(params![
+                        pkg,
+                        i.issue_id,
+                        i.kind,
+                        i.title,
+                        i.subtitle,
+                        i.fallback_signature,
+                        i.first_version,
+                        i.last_version,
+                        i.first_seen,
+                        i.last_seen,
+                        i.issue_uri,
+                        i.sample_event
+                    ])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    /// Issues ainda sem stack: `(issue_id, sample_event, kind)`.
+    pub fn crashlytics_without_details(
+        &self,
+        pkg: &str,
+        limit: usize,
+    ) -> AppResult<Vec<(String, String, String)>> {
+        self.with(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT issue_id, sample_event, kind FROM crashlytics_issue
+                 WHERE package_name = ?1 AND sample_stack IS NULL AND sample_event IS NOT NULL
+                 ORDER BY last_seen DESC LIMIT ?2",
+            )?;
+            let rows = stmt
+                .query_map(params![pkg, limit as i64], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+    }
+
+    /// `(sample_event, kind)` de um issue, se houver evento de amostra.
+    pub fn crashlytics_sample_event(
+        &self,
+        pkg: &str,
+        issue_id: &str,
+    ) -> AppResult<Option<(String, String)>> {
+        self.with(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT sample_event, kind FROM crashlytics_issue
+                     WHERE package_name = ?1 AND issue_id = ?2 AND sample_event IS NOT NULL",
+                    params![pkg, issue_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?)
+        })
+    }
+
+    /// Grava stack e assinatura definitiva. Se o problema já existia com a
+    /// assinatura provisória, ele é renomeado (mantém status, notas, responsável).
+    pub fn set_crashlytics_details(&self, pkg: &str, d: &ClIssueDetails) -> AppResult<()> {
+        self.with(|conn| {
+            let tx = conn.transaction()?;
+            let old: Option<String> = tx
+                .query_row(
+                    "SELECT signature FROM crashlytics_issue WHERE package_name = ?1 AND issue_id = ?2",
+                    params![pkg, d.issue_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            tx.execute(
+                "UPDATE crashlytics_issue SET root_type = ?3, blame_symbol = ?4, signature = ?5,
+                   title = ?6, sample_stack = ?7
+                 WHERE package_name = ?1 AND issue_id = ?2",
+                params![
+                    pkg,
+                    d.issue_id,
+                    d.root_type,
+                    d.blame_symbol,
+                    d.signature,
+                    d.title,
+                    d.stack
+                ],
+            )?;
+            if let Some(old) = old.filter(|o| *o != d.signature) {
+                tx.execute(
+                    "UPDATE problem SET signature = ?3, title = ?4, updated_at = ?5
+                     WHERE package_name = ?1 AND signature = ?2
+                       AND NOT EXISTS (SELECT 1 FROM problem p2 WHERE p2.package_name = ?1 AND p2.signature = ?3)",
+                    params![pkg, old, d.signature, d.title, now()],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    pub fn upsert_crashlytics_issue_daily(&self, pkg: &str, rows: &[ClDayIn]) -> AppResult<()> {
+        self.with(|conn| {
+            let tx = conn.transaction()?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT INTO crashlytics_issue_daily (package_name, issue_id, day, events, users)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT (package_name, issue_id, day) DO UPDATE SET
+                       events = excluded.events, users = excluded.users",
+                )?;
+                for r in rows {
+                    stmt.execute(params![pkg, r.key, r.day, r.events, r.users])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    pub fn upsert_crashlytics_version_daily(
+        &self,
+        pkg: &str,
+        kind: &str,
+        rows: &[ClDayIn],
+    ) -> AppResult<()> {
+        self.with(|conn| {
+            let tx = conn.transaction()?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT INTO crashlytics_version_daily (package_name, kind, day, build_version, display_version,
+                       events, users, crash_free_users, crash_free_sessions)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                     ON CONFLICT (package_name, kind, day, build_version) DO UPDATE SET
+                       display_version = excluded.display_version, events = excluded.events,
+                       users = excluded.users, crash_free_users = excluded.crash_free_users,
+                       crash_free_sessions = excluded.crash_free_sessions",
+                )?;
+                for r in rows {
+                    stmt.execute(params![
+                        pkg,
+                        kind,
+                        r.day,
+                        r.key,
+                        r.display_version,
+                        r.events,
+                        r.users,
+                        r.crash_free_users,
+                        r.crash_free_sessions
+                    ])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    pub fn replace_crashlytics_issue_versions(
+        &self,
+        pkg: &str,
+        issue_id: &str,
+        rows: &[ClDayIn],
+    ) -> AppResult<()> {
+        let ts = now();
+        self.with(|conn| {
+            let tx = conn.transaction()?;
+            tx.execute(
+                "DELETE FROM crashlytics_issue_version WHERE package_name = ?1 AND issue_id = ?2",
+                params![pkg, issue_id],
+            )?;
+            for r in rows {
+                tx.execute(
+                    "INSERT OR REPLACE INTO crashlytics_issue_version
+                       (package_name, issue_id, build_version, display_version, events, users, fetched_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![pkg, issue_id, r.key, r.display_version, r.events, r.users, ts],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    // ---------- unificação e problemas ----------
+
+    /// Cria problemas para assinaturas novas e marca como "regressed" os
+    /// resolvidos que voltaram a aparecer numa versão posterior à da correção.
+    pub fn unify(&self, pkg: &str) -> AppResult<usize> {
+        let ts = now();
+        self.with(|conn| {
+            let tx = conn.transaction()?;
+            tx.execute(
+                "INSERT OR IGNORE INTO problem (package_name, signature, kind, title, created_at, updated_at)
+                 SELECT package_name, signature, MIN(kind), MIN(title), ?2, ?2 FROM (
+                   SELECT package_name, signature, kind, title FROM play_issue WHERE package_name = ?1
+                   UNION ALL
+                   SELECT package_name, signature, kind, title FROM crashlytics_issue WHERE package_name = ?1
+                 ) GROUP BY package_name, signature",
+                params![pkg, ts],
+            )?;
+            let regressed = tx.execute(
+                "UPDATE problem SET status = 'regressed', updated_at = ?2
+                 WHERE package_name = ?1 AND status = 'resolved' AND resolved_in_version IS NOT NULL AND (
+                   EXISTS (SELECT 1 FROM crashlytics_issue c
+                           WHERE c.package_name = problem.package_name AND c.signature = problem.signature
+                             AND CAST(c.last_version AS INTEGER) > CAST(problem.resolved_in_version AS INTEGER))
+                   OR EXISTS (SELECT 1 FROM play_issue p
+                              WHERE p.package_name = problem.package_name AND p.signature = problem.signature
+                                AND CAST(p.last_version AS INTEGER) > CAST(problem.resolved_in_version AS INTEGER)))",
+                params![pkg, ts],
+            )?;
+            tx.commit()?;
+            Ok(regressed)
+        })
+    }
+
+    pub fn list_problems(&self, pkg: &str, f: &ProblemFilter) -> AppResult<Vec<ProblemRow>> {
+        self.with(|conn| {
+            let mut stmt = conn.prepare(PROBLEMS_SQL)?;
+            let rows = stmt
+                .query_map(
+                    named_params! {
+                        ":package": pkg, ":days": f.days, ":status": f.status, ":kind": f.kind,
+                    },
+                    |r| {
+                        Ok(ProblemRow {
+                            id: r.get("id")?,
+                            kind: r.get("kind")?,
+                            title: r.get("title")?,
+                            status: r.get("status")?,
+                            assignee: r.get("assignee")?,
+                            sources: r.get("sources")?,
+                            play_reports: r.get("play_reports")?,
+                            play_users: r.get("play_users")?,
+                            cl_events: r.get("cl_events")?,
+                            cl_users: r.get("cl_users")?,
+                            first_version: r.get("first_version")?,
+                            last_version: r.get("last_version")?,
+                            last_seen: r.get("last_seen")?,
+                            impact: r.get("impact")?,
+                        })
+                    },
+                )?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+    }
+
+    pub fn get_problem(&self, id: i64) -> AppResult<ProblemDetail> {
+        self.with(|conn| {
+            let problem = conn
+                .query_row(
+                    "SELECT id, package_name, signature, kind, title, status, assignee, notes,
+                            resolved_in_version, created_at, updated_at
+                     FROM problem WHERE id = ?1",
+                    [id],
+                    |r| {
+                        Ok(ProblemCore {
+                            id: r.get(0)?,
+                            package_name: r.get(1)?,
+                            signature: r.get(2)?,
+                            kind: r.get(3)?,
+                            title: r.get(4)?,
+                            status: r.get(5)?,
+                            assignee: r.get(6)?,
+                            notes: r.get(7)?,
+                            resolved_in_version: r.get(8)?,
+                            created_at: r.get(9)?,
+                            updated_at: r.get(10)?,
+                        })
+                    },
+                )
+                .optional()?
+                .ok_or_else(|| AppError::Invalid("problema não encontrado".into()))?;
+            let key = params![problem.package_name, problem.signature];
+
+            let play_issues = conn
+                .prepare(
+                    "SELECT issue_id, cause, location, report_count, distinct_users, first_version,
+                            last_version, last_seen, issue_uri, sample_report
+                     FROM play_issue WHERE package_name = ?1 AND signature = ?2
+                     ORDER BY report_count DESC",
+                )?
+                .query_map(key, |r| {
+                    Ok(PlayIssueRow {
+                        issue_id: r.get(0)?,
+                        cause: r.get(1)?,
+                        location: r.get(2)?,
+                        report_count: r.get(3)?,
+                        distinct_users: r.get(4)?,
+                        first_version: r.get(5)?,
+                        last_version: r.get(6)?,
+                        last_seen: r.get(7)?,
+                        issue_uri: r.get(8)?,
+                        sample_report: r.get(9)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let crashlytics_issues = conn
+                .prepare(
+                    "SELECT issue_id, title, subtitle, root_type, blame_symbol, first_version, last_version,
+                            first_seen, last_seen, issue_uri, sample_stack
+                     FROM crashlytics_issue WHERE package_name = ?1 AND signature = ?2",
+                )?
+                .query_map(key, |r| {
+                    Ok(ClIssueRow {
+                        issue_id: r.get(0)?,
+                        title: r.get(1)?,
+                        subtitle: r.get(2)?,
+                        root_type: r.get(3)?,
+                        blame_symbol: r.get(4)?,
+                        first_version: r.get(5)?,
+                        last_version: r.get(6)?,
+                        first_seen: r.get(7)?,
+                        last_seen: r.get(8)?,
+                        issue_uri: r.get(9)?,
+                        sample_stack: r.get(10)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let by_version = conn
+                .prepare(
+                    "SELECT v.build_version, MAX(v.display_version), SUM(v.events), SUM(v.users)
+                     FROM crashlytics_issue_version v
+                     JOIN crashlytics_issue c ON c.package_name = v.package_name AND c.issue_id = v.issue_id
+                     WHERE c.package_name = ?1 AND c.signature = ?2
+                     GROUP BY v.build_version
+                     ORDER BY CAST(v.build_version AS INTEGER) DESC
+                     LIMIT 50",
+                )?
+                .query_map(key, |r| {
+                    Ok(VersionCount {
+                        build_version: r.get(0)?,
+                        display_version: r.get(1)?,
+                        events: r.get(2)?,
+                        users: r.get(3)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(ProblemDetail {
+                problem,
+                play_issues,
+                crashlytics_issues,
+                by_version,
+            })
+        })
+    }
+
+    pub fn update_problem(
+        &self,
+        id: i64,
+        status: &str,
+        assignee: Option<String>,
+        notes: Option<String>,
+        resolved_in_version: Option<String>,
+    ) -> AppResult<()> {
+        self.with(|conn| {
+            let n = conn.execute(
+                "UPDATE problem SET status = ?2, assignee = ?3, notes = ?4, resolved_in_version = ?5, updated_at = ?6
+                 WHERE id = ?1",
+                params![id, status, assignee, notes, resolved_in_version, now()],
+            )?;
+            if n == 0 {
+                return Err(AppError::Invalid("problema não encontrado".into()));
+            }
+            Ok(())
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("stackquake-test-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn hex_encodes() {
+        assert_eq!(hex(&[0x00, 0xab, 0xff]).as_str(), "00abff");
+    }
+
+    #[test]
+    fn database_file_is_encrypted_at_rest() {
+        let dir = temp_dir("enc");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("enc.db");
+        let key = hex(&*secrets::random_bytes::<32>().unwrap());
+        {
+            let conn = Connection::open(&path).unwrap();
+            unlock(&conn, &key).unwrap();
+            conn.execute_batch(SCHEMA).unwrap();
+            conn.execute(
+                "INSERT INTO app (package_name, display_name) VALUES ('com.secret.app', 'Segredo')",
+                [],
+            )
+            .unwrap();
+        }
+        let raw = std::fs::read(&path).unwrap();
+        assert!(
+            !raw.starts_with(b"SQLite format 3"),
+            "cabeçalho em texto claro"
+        );
+        assert!(
+            !raw.windows(14).any(|w| w == b"com.secret.app"),
+            "dado em texto claro"
+        );
+        let other = hex(&*secrets::random_bytes::<32>().unwrap());
+        assert!(unlock(&Connection::open(&path).unwrap(), &other).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn mem_db() -> Db {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        Db {
+            dir: temp_dir("mem"),
+            path: PathBuf::new(),
+            key_name: "unused".into(),
+            conn: Mutex::new(conn),
+        }
+    }
+
+    #[test]
+    fn replace_apps_removes_apps_no_longer_in_account() {
+        let db = mem_db();
+        db.replace_apps(&[("com.a.one".into(), None), ("com.a.two".into(), None)])
+            .unwrap();
+        db.replace_apps(&[("com.b.three".into(), Some("Três".into()))])
+            .unwrap();
+        let names: Vec<String> = db
+            .list_apps()
+            .unwrap()
+            .into_iter()
+            .map(|a| a.package_name)
+            .collect();
+        assert_eq!(names, vec!["com.b.three"]);
+    }
+
+    #[test]
+    fn crashlytics_details_rename_problem_keeping_status() {
+        let db = mem_db();
+        db.replace_apps(&[("com.a.app".into(), None)]).unwrap();
+        db.upsert_crashlytics_issues(
+            "com.a.app",
+            &[ClIssueIn {
+                issue_id: "i1".into(),
+                kind: "crash".into(),
+                title: "Foo".into(),
+                subtitle: None,
+                fallback_signature: "crash|cl:i1".into(),
+                first_version: Some("10".into()),
+                last_version: Some("12".into()),
+                first_seen: None,
+                last_seen: None,
+                issue_uri: None,
+                sample_event: Some("e".into()),
+            }],
+        )
+        .unwrap();
+        db.upsert_crashlytics_issue_daily(
+            "com.a.app",
+            &[ClDayIn {
+                key: "i1".into(),
+                display_version: None,
+                day: chrono::Utc::now().format("%Y-%m-%d").to_string(),
+                events: 3,
+                users: 2,
+                crash_free_users: None,
+                crash_free_sessions: None,
+            }],
+        )
+        .unwrap();
+        db.unify("com.a.app").unwrap();
+        let id = db
+            .list_problems(
+                "com.a.app",
+                &ProblemFilter {
+                    days: 30,
+                    status: None,
+                    kind: None,
+                },
+            )
+            .unwrap()[0]
+            .id;
+        db.update_problem(id, "investigating", Some("ana".into()), None, None)
+            .unwrap();
+        db.set_crashlytics_details(
+            "com.a.app",
+            &ClIssueDetails {
+                issue_id: "i1".into(),
+                root_type: Some("java.lang.IllegalStateException".into()),
+                blame_symbol: Some("com.a.Foo.bar".into()),
+                signature: "crash|IllegalStateException|Foo.bar".into(),
+                title: "IllegalStateException em Foo.bar".into(),
+                stack: "...".into(),
+            },
+        )
+        .unwrap();
+        let p = db.get_problem(id).unwrap().problem;
+        assert_eq!(p.signature, "crash|IllegalStateException|Foo.bar");
+        assert_eq!(
+            (p.status.as_str(), p.assignee.as_deref()),
+            ("investigating", Some("ana"))
+        );
+    }
+
+    #[test]
+    fn schema_and_problems_query_are_valid() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.prepare(PROBLEMS_SQL).unwrap();
+    }
+
+    #[test]
+    fn kpi_authorizer_blocks_writes_and_attach() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.authorizer(Some(kpi_authorizer)).unwrap();
+        assert!(conn.prepare("SELECT count(*) FROM problem").is_ok());
+        assert!(conn.prepare("DELETE FROM problem").is_err());
+        assert!(conn.prepare("ATTACH DATABASE 'x.db' AS x").is_err());
+        assert!(conn.prepare("PRAGMA key = 'x'").is_err());
+    }
+}

@@ -1,0 +1,12 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+.DS_Store
+*.log
+# Nunca versione credenciais
+client_secret*.json
+src-tauri/google-oauth-client.json
+*.db
+*.db-wal
+*.db-shm

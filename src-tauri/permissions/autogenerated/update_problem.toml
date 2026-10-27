@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-update-problem"
+description = "Enables the update_problem command without any pre-configured scope."
+commands.allow = ["update_problem"]
+
+[[permission]]
+identifier = "deny-update-problem"
+description = "Denies the update_problem command without any pre-configured scope."
+commands.deny = ["update_problem"]
