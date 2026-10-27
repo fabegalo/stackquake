@@ -28,6 +28,10 @@ Para o login funcionar no seu build, registre o app no Google uma vez: [docs/DEV
 
 Contribuições são bem-vindas. A documentação técnica, o código e as mensagens de commit são em inglês e seguem o [Conventional Commits](https://www.conventionalcommits.org/). Veja [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Privacidade
+
+O Stackquake não tem servidor nem telemetria; seus dados ficam no seu computador. Veja [PRIVACY.md](PRIVACY.md) (em inglês).
+
 ## Licença
 
 [Apache-2.0](LICENSE).

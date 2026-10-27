@@ -82,6 +82,10 @@ Click **reload**. A file with the same name as a built-in KPI (e.g. `02_version_
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md); commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
+## Privacy
+
+Stackquake has no servers and no telemetry; your data stays on your computer. See [PRIVACY.md](PRIVACY.md).
+
 ## License
 
 [Apache-2.0](LICENSE).
