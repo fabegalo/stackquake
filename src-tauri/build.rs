@@ -30,7 +30,8 @@ fn embed_oauth_client() {
     println!("cargo:rerun-if-env-changed=STACKQUAKE_GOOGLE_CLIENT_SECRET");
     println!("cargo:rerun-if-changed={CLIENT_FILE}");
 
-    if std::env::var("STACKQUAKE_GOOGLE_CLIENT_ID").is_ok() {
+    let from_env = |k: &str| std::env::var(k).is_ok_and(|v| !v.trim().is_empty());
+    if from_env("STACKQUAKE_GOOGLE_CLIENT_ID") && from_env("STACKQUAKE_GOOGLE_CLIENT_SECRET") {
         return; // option_env! reads straight from the environment
     }
     let Ok(raw) = std::fs::read_to_string(CLIENT_FILE) else {
