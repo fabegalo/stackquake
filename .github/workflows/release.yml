@@ -1,7 +1,7 @@
 name: Release
 
-# Gera os instaladores (Windows .msi/.exe, macOS .dmg, Linux .AppImage/.deb/.rpm)
-# ao publicar uma tag vX.Y.Z, com atestado de proveniência (SLSA) de cada artefato.
+# Builds the installers (Windows .msi/.exe, macOS .dmg, Linux .AppImage/.deb/.rpm)
+# when a vX.Y.Z tag is pushed, with a provenance attestation (SLSA) per artifact.
 on:
   push:
     tags: ["v*.*.*"]
@@ -12,8 +12,8 @@ permissions:
 jobs:
   build:
     permissions:
-      contents: write # criar o rascunho da release
-      id-token: write # atestado de proveniência
+      contents: write # create the draft release
+      id-token: write # provenance attestation
       attestations: write
     strategy:
       fail-fast: false
@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Dependências do sistema (Linux)
+      - name: System dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -51,10 +51,10 @@ jobs:
         id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Cliente OAuth "App para computador" embutido no build (docs/DESENVOLVIMENTO.md).
+          # "Desktop app" OAuth client embedded at build time (docs/DEVELOPMENT.md).
           STACKQUAKE_GOOGLE_CLIENT_ID: ${{ secrets.STACKQUAKE_GOOGLE_CLIENT_ID }}
           STACKQUAKE_GOOGLE_CLIENT_SECRET: ${{ secrets.STACKQUAKE_GOOGLE_CLIENT_SECRET }}
-          # Assinatura de código (opcional; configure os secrets para ativar):
+          # Code signing (optional; configure the secrets to enable it):
           # macOS: APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
           #        APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -66,10 +66,10 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Stackquake ${{ github.ref_name }}"
-          releaseBody: "Veja o CHANGELOG. Verifique a proveniência com: gh attestation verify <arquivo> --repo ${{ github.repository }}"
+          releaseBody: "See the CHANGELOG. Verify provenance with: gh attestation verify <file> --repo ${{ github.repository }}"
           releaseDraft: true
           args: ${{ matrix.args }}
-      - name: Atestado de proveniência
+      - name: Provenance attestation
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
